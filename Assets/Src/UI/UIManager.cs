@@ -54,9 +54,14 @@ public class UIManager : MonoBehaviour
     [SerializeField] public TMP_Text gameLaps;
     [SerializeField] public TMP_Text gameOverallTime;
     [SerializeField] public TMP_Text gameLapTime;
+    [SerializeField] public TMP_Text carJerk;
+    [SerializeField] public TMP_Text highestJerk;
+    [SerializeField] public TMP_Text averageExportError;
+    [SerializeField] public TMP_Text hitPercentage;
     [SerializeField] public Button gameRespawn;
     [SerializeField] public Toggle gameInterpolation;
     [SerializeField] public Button gameExit;
+    
 
     [Header("End Game")] [SerializeField] public GameObject endGameCanvas;
     

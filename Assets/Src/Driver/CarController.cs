@@ -39,9 +39,9 @@ public class CarController : NetworkBehaviour
     #region Variables
 
     private static AppConfig APP_CONFIG => AppConfig.Singleton;
-    
+
     private const float STEER_HELPER = 0.8f;
-    
+
     [Header("Car Properties")] [SerializeField]
     public string carName;
 
@@ -55,7 +55,7 @@ public class CarController : NetworkBehaviour
     private readonly NetworkVariable<int> _networkSpeed = new();
     private readonly NetworkVariable<PosAndRotNetworkData> _networkData = new();
     // private readonly NetworkVariable<float> _networkWheelYRot = new();
-    
+
     private List<Material[]> _originalMaterials;
 
     [SerializeField] [HideInInspector] private int _laps;
@@ -71,7 +71,7 @@ public class CarController : NetworkBehaviour
     [SerializeField] [HideInInspector] public float inputSteering;
     [SerializeField] [HideInInspector] public float inputBrake;
     [SerializeField] [HideInInspector] private float currentRotation;
-    
+
     [SerializeField] [HideInInspector] private float _forwardMotorTorque = 100000f;
     [SerializeField] [HideInInspector] private float _backwardMotorTorque = 50000f;
     [SerializeField] [HideInInspector] private float _maxSteeringAngle = 15f;
@@ -88,7 +88,15 @@ public class CarController : NetworkBehaviour
     public int ID { get; private set; }
     public bool RubberBand { get; private set; } = true;
     public bool Interpolation { get; private set; } = true;
-    
+
+    // --- Dead Reckoning configuration ---
+    [Header("Dead Reckoning")]
+    [SerializeField] private bool deadReckoningEnabled = true; // master switch
+    [SerializeField] private float snapThreshold = 8f; // world units: if predicted deviates more than this, snap to server pos
+    [SerializeField] private float correctionTime = 0.12f; // seconds to smoothly correct to server update
+    [SerializeField] private float maxExtrapolation = 0.5f; // max seconds to extrapolate
+    [SerializeField] private float extrapolationBlend = 0.9f; // blending factor towards predicted position
+
     private int Laps
     {
         get => _laps;
@@ -106,6 +114,43 @@ public class CarController : NetworkBehaviour
     private bool IsRacing => State != CarState.Dead && State != CarState.Idle;
     private bool IsRace => GameManager.Instance.CLASSIF_STATES.Contains(NetworkPlayer.CurrentRace);
     private bool IsClassif => GameManager.Instance.RACE_STATES.Contains(NetworkPlayer.CurrentRace);
+
+    Vector3 prevPos;
+    float prevVel;
+    float prevAcc;
+    float highestJerk;
+
+    [SerializeField] JerkCounter jerkCounter;
+    [SerializeField] MovingAverage movingAverage;
+    [SerializeField] ExponentialMovingAverage exponentialMovingAverage;
+
+    // ---- Dead reckoning runtime state ----
+    private Vector3 _lastServerPos;
+    private Vector3 _lastServerVel;
+    private float _lastServerRecvTime;
+    private bool _hasServerState = false;
+    private Coroutine _correctionCoroutine;
+
+    private Vector3 correctionStartPos;
+    private Quaternion correctionStartRot;
+    private Vector3 correctionTargetPos;
+    private Quaternion correctionTargetRot;
+    private float correctionTimer = 0f;
+    private float correctionDuration = 0.12f;
+    private bool isCorrecting = false;
+
+
+    // --- Metrics for AEE / Hit% (paper-style) ---
+    [Header("Metrics")]
+    private float hitThreshold = 0.5f; // threshold used for hit% (same as g in the paper)
+    // Running accumulators (kept simple: accumulated error, count, hits)
+    private double _aeeSum = 0.0;
+    private long _aeeCount = 0;
+    private long _hitCount = 0;
+
+    // Exposed getters (optional)
+    public float CurrentAEE => _aeeCount > 0 ? (float)(_aeeSum / _aeeCount) : 0f;
+    public float CurrentHitPercentage => _aeeCount > 0 ? (_hitCount * 100f / _aeeCount) : 0f;
 
     #endregion Variables
 
@@ -197,6 +242,22 @@ public class CarController : NetworkBehaviour
         NetworkPlayer.lastLapPos = 0f;
         NetworkPlayer.checkpointAchieved = false;
         NetworkPlayer.RubberBandCoefficient = 1f;
+
+        // Reset AEE/Hit counters
+        _aeeSum = 0.0;
+        _aeeCount = 0;
+        _hitCount = 0;
+
+        // Clear UI if available
+        if (UIManager.Instance != null)
+        {
+            try
+            {
+                UIManager.Instance.averageExportError.text = "0.00";
+                UIManager.Instance.hitPercentage.text = "0.0%";
+            }
+            catch (Exception) { }
+        }
     }
     
     private void OnRocketChange(int newVal)
@@ -239,6 +300,16 @@ public class CarController : NetworkBehaviour
             UIManager.Instance.gameRespawn.onClick.RemoveListener(RespawnInProjPosRpc);
             UIManager.Instance.gameInterpolation.onValueChanged.RemoveListener(value => Interpolation = value);
             EventManager.Instance.ScreenChange.RemoveListener(OnScreenChange);
+        }
+
+        // Unsubscribe dead reckoning listener
+        if (!IsServer)
+        {
+            try
+            {
+                _networkData.OnValueChanged -= OnNetworkDataChanged;
+            }
+            catch (Exception) { }
         }
     }
 
@@ -286,6 +357,109 @@ public class CarController : NetworkBehaviour
             }
 
         if (NetworkPlayer == null) throw new Exception("Player not found!");
+
+        // Subscribe to network data changes (used for dead reckoning)
+        if (!IsServer)
+        {
+            _networkData.OnValueChanged += OnNetworkDataChanged;
+        }
+    }
+
+    // Dead reckoning: when a new network state arrives, estimate velocity and optionally smoothly correct position
+    private void OnNetworkDataChanged(PosAndRotNetworkData oldVal, PosAndRotNetworkData newVal)
+    {
+        // ignore zeros (server uses Vector3.zero as reset flag)
+        if (newVal.Position == Vector3.zero) return;
+
+        float now = Time.time;
+
+        if (_hasServerState)
+        {
+            float dt = now - _lastServerRecvTime;
+            if (dt > 0.0001f)
+            {
+                // estimated velocity of the server-owned rigidbody between updates
+                Vector3 newVel = (newVal.Position - _lastServerPos) / dt;
+                float velAlpha = 0.25f; // smoothing factor
+                _lastServerVel = Vector3.Lerp(_lastServerVel, newVel, velAlpha);
+            }
+        }
+        else
+        {
+            _lastServerVel = Vector3.zero;
+            _hasServerState = true;
+        }
+
+        _lastServerPos = newVal.Position;
+        _lastServerRecvTime = now;
+
+        // --- Update AEE / Hit% metrics (we measure how far the client display was from server state when update arrives)
+        try
+        {
+            float error = Vector3.Distance(transform.position, newVal.Position);
+            _aeeSum += error;
+            _aeeCount++;
+            if (error <= hitThreshold) _hitCount++;
+
+            // Update UI (if present)
+            if (UIManager.Instance != null)
+            {
+                UIManager.Instance.averageExportError.text = $"{(float)(_aeeSum / Math.Max(1, _aeeCount)):0.00}";
+                UIManager.Instance.hitPercentage.text = $"{(_aeeCount > 0 ? (_hitCount * 100f / _aeeCount) : 0f):0.0}%";
+            }
+        }
+        catch (Exception) { }
+
+
+        // If the local prediction is far off, start a smooth correction to avoid visible teleport
+        isCorrecting = false;
+        float dist = Vector3.Distance(transform.position, _lastServerPos);
+
+        // If too far, snap immediately to avoid huge mismatch (can be tuned)
+        if (dist > snapThreshold * 3f)
+        {
+            
+            transform.position = _lastServerPos;
+            transform.rotation = Quaternion.Euler(newVal.Rotation);
+        }
+        else
+        {
+            correctionStartPos = transform.position;
+            correctionStartRot = transform.rotation;
+            correctionTargetPos = _lastServerPos;
+            correctionTargetRot = Quaternion.Euler(newVal.Rotation);
+
+            correctionTimer = 0f;
+            correctionDuration = correctionTime;
+            isCorrecting = true;
+        }
+    }
+
+    private IEnumerator SmoothCorrection(Vector3 targetPos, Quaternion targetRot, float duration)
+    {
+        float t = 0f;
+        Vector3 startPos = transform.position;
+        Quaternion startRot = transform.rotation;
+
+        // If duration is zero or negative, immediate correction
+        if (duration <= 0f)
+        {
+            transform.position = targetPos;
+            transform.rotation = targetRot;
+            yield break;
+        }
+
+        while (t < duration)
+        {
+            float alpha = t / duration;
+            transform.position = Vector3.Lerp(startPos, targetPos, alpha);
+            transform.rotation = Quaternion.Slerp(startRot, targetRot, alpha);
+            t += Time.deltaTime;
+            yield return null;
+        }
+
+        transform.position = targetPos;
+        transform.rotation = targetRot;
     }
 
     public void FixedUpdate()
@@ -363,15 +537,6 @@ public class CarController : NetworkBehaviour
                     Position = transform.position,
                     Rotation = transform.rotation.eulerAngles
                 };
-
-                /*
-                 * TODO: rotate the wheels in the client
-                 * This approach is not working properly, the wheels are not rotating around the y-axis as expected
-                 *
-                Quaternion rot;
-                axleInfos[0].rightWheel.GetWorldPose(out _, out rot);
-                _networkWheelYRot.Value = rot.eulerAngles.y;
-                 */
             }
             // If the car is kinematic, reset the car position and rotation: it may give random values
             else
@@ -388,34 +553,98 @@ public class CarController : NetworkBehaviour
         // If the car is in the client, interpolate the car position and rotation
         else if (!_rigidbody.isKinematic && !(_networkData.Value.Position == Vector3.zero))
         {
-            if (Interpolation)
+            if (deadReckoningEnabled && _hasServerState)
             {
-                var targetPosition =
-                    Vector3.SmoothDamp(transform.position, _networkData.Value.Position, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
-                var targetRotation = Quaternion.Euler(
-                    Mathf.SmoothDampAngle(transform.eulerAngles.x, _networkData.Value.Rotation.x, ref _velRot.x,
-                        APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
-                    Mathf.SmoothDampAngle(transform.eulerAngles.y, _networkData.Value.Rotation.y, ref _velRot.y,
-                        APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
-                    Mathf.SmoothDampAngle(transform.eulerAngles.z, _networkData.Value.Rotation.z, ref _velRot.z,
-                        APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME));
+                // 1) Prediction (always run)
+                float age = Time.time - _lastServerRecvTime;
+                float clampedAge = Mathf.Min(age, maxExtrapolation);
+                Vector3 predictedPos = _lastServerPos + _lastServerVel * clampedAge;
+                Quaternion predictedRot = Quaternion.Euler(_networkData.Value.Rotation);
 
-                transform.position = targetPosition;
-                transform.rotation = targetRotation;
+                // 2) Correction takes precedence for authoritative reconciliation:
+                if (Vector3.Distance(transform.position, _lastServerPos) > snapThreshold * 3f)
+                {
+                    _rigidbody.MovePosition(_lastServerPos);
+                    _rigidbody.MoveRotation(predictedRot);
+                    isCorrecting = false;
+                }
+                // else if (isCorrecting && correctionDuration > 0f)
+                // {
+                //     Debug.Log("correcting");
+                //     // advance timer first
+                //     correctionTimer += Time.fixedDeltaTime;
+                //     float t = Mathf.Clamp01(correctionTimer / correctionDuration);
 
-                /*
-                 * TODO: rotate the wheels in the client
-                 * This approach is not working properly, the wheels are not rotating around the y-axis as expected
-                 *
-                axleInfos[0].rightWheel.transform.rotation = Quaternion.Euler(0f, _networkWheelYRot.Value, 0f);
-                axleInfos[0].leftWheel.transform.rotation = Quaternion.Euler(0f, _networkWheelYRot.Value, 0f);
-                 */
+                //     // interpolate from saved start -> target
+                //     Vector3 nextPos = Vector3.Lerp(correctionStartPos, correctionTargetPos, t);
+                //     Quaternion nextRot = Quaternion.Slerp(correctionStartRot, correctionTargetRot, t);
+
+                //     _rigidbody.MovePosition(nextPos);
+                //     _rigidbody.MoveRotation(nextRot);
+
+                //     if (t >= 1f) isCorrecting = false;
+                // }
+                else
+                {
+                    Debug.Log("predicting");
+                    // 3) Normal predicted/interpolated motion (no correction active)
+                    // if (Interpolation)
+                    // {
+                    //     Vector3 smoothPos = Vector3.SmoothDamp(transform.position, predictedPos, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
+                    //     Quaternion smoothRot = Quaternion.Euler(
+                    //         Mathf.SmoothDampAngle(transform.eulerAngles.x, predictedRot.eulerAngles.x, ref _velRot.x, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
+                    //         Mathf.SmoothDampAngle(transform.eulerAngles.y, predictedRot.eulerAngles.y, ref _velRot.y, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
+                    //         Mathf.SmoothDampAngle(transform.eulerAngles.z, predictedRot.eulerAngles.z, ref _velRot.z, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME)
+                    //     );
+
+                    //     _rigidbody.MovePosition(smoothPos);
+                    //     _rigidbody.MoveRotation(smoothRot);
+                    // }
+                    // else
+                    // {
+                        // blend a bit towards predicted
+                        Vector3 blended = Vector3.Lerp(transform.position, predictedPos, extrapolationBlend);
+                        Quaternion blendedRot = Quaternion.Slerp(transform.rotation, predictedRot, extrapolationBlend);
+                        _rigidbody.MovePosition(blended);
+                        _rigidbody.MoveRotation(blendedRot);
+                    // }
+                }
             }
             else
             {
-                transform.position = _networkData.Value.Position;
-                transform.rotation = Quaternion.Euler(_networkData.Value.Rotation);
+                // legacy interpolation path: still use MovePosition/MoveRotation
+                if (Interpolation)
+                {
+                    var targetPosition =
+                        Vector3.SmoothDamp(transform.position, _networkData.Value.Position, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
+                    var targetRotation = Quaternion.Euler(
+                        Mathf.SmoothDampAngle(transform.eulerAngles.x, _networkData.Value.Rotation.x, ref _velRot.x,
+                            APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
+                        Mathf.SmoothDampAngle(transform.eulerAngles.y, _networkData.Value.Rotation.y, ref _velRot.y,
+                            APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
+                        Mathf.SmoothDampAngle(transform.eulerAngles.z, _networkData.Value.Rotation.z, ref _velRot.z,
+                            APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME));
+
+                    _rigidbody.MovePosition(targetPosition);
+                    _rigidbody.MoveRotation(targetRotation);
+                }
+                else
+                {
+                    _rigidbody.MovePosition(_networkData.Value.Position);
+                    _rigidbody.MoveRotation(Quaternion.Euler(_networkData.Value.Rotation));
+                }
             }
+
+            // Jerk computation: get positions after MovePosition applied would be next physics tick,
+            // but you can compute visual metrics using transform as before if acceptable.
+            float vel = Vector3.Distance(transform.position, prevPos) / Time.fixedDeltaTime;
+            prevPos = transform.position;
+            float acc = Mathf.Abs(vel - prevVel) / Time.fixedDeltaTime;
+            prevVel = vel;
+            float jerk = Mathf.Abs(acc - prevAcc) / Time.fixedDeltaTime;
+            prevAcc = acc;
+            float jerkSmooth = jerkCounter.Update(jerk);
+            UIManager.Instance.carJerk.text = $"{(int)jerkSmooth}";
         }
     }
     
@@ -731,4 +960,5 @@ public class CarController : NetworkBehaviour
     }
 
     #endregion
+
 }
