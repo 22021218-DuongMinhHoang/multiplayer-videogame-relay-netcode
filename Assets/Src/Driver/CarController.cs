@@ -95,7 +95,7 @@ public class CarController : NetworkBehaviour
     [SerializeField] private float snapThreshold = 8f; // world units: if predicted deviates more than this, snap to server pos
     [SerializeField] private float correctionTime = 0.12f; // seconds to smoothly correct to server update
     [SerializeField] private float maxExtrapolation = 0.5f; // max seconds to extrapolate
-    [SerializeField] private float extrapolationBlend = 0.9f; // blending factor towards predicted position
+    [SerializeField] private float extrapolationBlend = 0.15f; // blending factor towards predicted position
 
     private int Laps
     {
@@ -419,8 +419,8 @@ public class CarController : NetworkBehaviour
         if (dist > snapThreshold * 3f)
         {
             
-            transform.position = _lastServerPos;
-            transform.rotation = Quaternion.Euler(newVal.Rotation);
+            // transform.position = _lastServerPos;
+            // transform.rotation = Quaternion.Euler(newVal.Rotation);
         }
         else
         {
@@ -560,59 +560,25 @@ public class CarController : NetworkBehaviour
                 float clampedAge = Mathf.Min(age, maxExtrapolation);
                 Vector3 predictedPos = _lastServerPos + _lastServerVel * clampedAge;
                 Quaternion predictedRot = Quaternion.Euler(_networkData.Value.Rotation);
+                Vector3 blended;
+                Quaternion blendedRot;
 
-                // 2) Correction takes precedence for authoritative reconciliation:
                 if (Vector3.Distance(transform.position, _lastServerPos) > snapThreshold * 3f)
                 {
-                    _rigidbody.MovePosition(_lastServerPos);
-                    _rigidbody.MoveRotation(predictedRot);
-                    isCorrecting = false;
+                    blended = Vector3.SmoothDamp(transform.position, _lastServerPos, ref _vel, extrapolationBlend);
+                    blendedRot = Quaternion.Slerp(transform.rotation, predictedRot, extrapolationBlend);
                 }
-                // else if (isCorrecting && correctionDuration > 0f)
-                // {
-                //     Debug.Log("correcting");
-                //     // advance timer first
-                //     correctionTimer += Time.fixedDeltaTime;
-                //     float t = Mathf.Clamp01(correctionTimer / correctionDuration);
-
-                //     // interpolate from saved start -> target
-                //     Vector3 nextPos = Vector3.Lerp(correctionStartPos, correctionTargetPos, t);
-                //     Quaternion nextRot = Quaternion.Slerp(correctionStartRot, correctionTargetRot, t);
-
-                //     _rigidbody.MovePosition(nextPos);
-                //     _rigidbody.MoveRotation(nextRot);
-
-                //     if (t >= 1f) isCorrecting = false;
-                // }
+                
                 else
                 {
-                    Debug.Log("predicting");
-                    // 3) Normal predicted/interpolated motion (no correction active)
-                    // if (Interpolation)
-                    // {
-                    //     Vector3 smoothPos = Vector3.SmoothDamp(transform.position, predictedPos, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
-                    //     Quaternion smoothRot = Quaternion.Euler(
-                    //         Mathf.SmoothDampAngle(transform.eulerAngles.x, predictedRot.eulerAngles.x, ref _velRot.x, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
-                    //         Mathf.SmoothDampAngle(transform.eulerAngles.y, predictedRot.eulerAngles.y, ref _velRot.y, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
-                    //         Mathf.SmoothDampAngle(transform.eulerAngles.z, predictedRot.eulerAngles.z, ref _velRot.z, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME)
-                    //     );
-
-                    //     _rigidbody.MovePosition(smoothPos);
-                    //     _rigidbody.MoveRotation(smoothRot);
-                    // }
-                    // else
-                    // {
-                        // blend a bit towards predicted
-                        Vector3 blended = Vector3.Lerp(transform.position, predictedPos, extrapolationBlend);
-                        Quaternion blendedRot = Quaternion.Slerp(transform.rotation, predictedRot, extrapolationBlend);
-                        _rigidbody.MovePosition(blended);
-                        _rigidbody.MoveRotation(blendedRot);
-                    // }
+                    blended = Vector3.SmoothDamp(transform.position, predictedPos, ref _vel, extrapolationBlend);
+                    blendedRot = Quaternion.Slerp(transform.rotation, predictedRot, extrapolationBlend);
                 }
+                _rigidbody.MovePosition(blended);
+                _rigidbody.MoveRotation(blendedRot);
             }
             else
             {
-                // legacy interpolation path: still use MovePosition/MoveRotation
                 if (Interpolation)
                 {
                     var targetPosition =
