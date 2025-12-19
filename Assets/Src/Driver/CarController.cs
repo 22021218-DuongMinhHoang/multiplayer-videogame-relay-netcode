@@ -10,20 +10,16 @@ using UnityEngine;
 public class CarController : NetworkBehaviour
 {
     #region Enablers, Collisions or Triggers
-
     private void OnTriggerEnter(Collider other)
     {
-        // Check if the player has passed the finish line and has not completed the race
         if (other.gameObject.CompareTag("Finish") && Laps <= GameManager.Instance.NumLaps)
         {
-            // Check if the player has completed a lap
             if (NetworkPlayer.CurrentLap.Equals(0))
             {
                 NetworkPlayer.lastLapPos = NetworkPlayer.CurrentPos;
                 NetworkPlayer.OnCurrentPosChangeEvent += NetworkPlayer.OnCurrentPosChange;
                 Laps++;
             }
-            // Or if the player has advanced to the next checkpoint before completing the lap
             else if (NetworkPlayer.checkpointAchieved)
             {
                 NetworkPlayer.checkpointAchieved = false;
@@ -33,18 +29,14 @@ public class CarController : NetworkBehaviour
             }
         }
     }
-
     #endregion
 
     #region Variables
 
     private static AppConfig APP_CONFIG => AppConfig.Singleton;
-
     private const float STEER_HELPER = 0.8f;
 
-    [Header("Car Properties")] [SerializeField]
-    public string carName;
-
+    [Header("Car Properties")] [SerializeField] public string carName;
     [SerializeField] public Material translucentMaterial;
     [SerializeField] public GameObject PlayerPanel;
     [SerializeField] public GameObject RocketPanel;
@@ -54,19 +46,15 @@ public class CarController : NetworkBehaviour
 
     private readonly NetworkVariable<int> _networkSpeed = new();
     private readonly NetworkVariable<PosAndRotNetworkData> _networkData = new();
-    // private readonly NetworkVariable<float> _networkWheelYRot = new();
-
     private List<Material[]> _originalMaterials;
 
     [SerializeField] [HideInInspector] private int _laps;
     [SerializeField] [HideInInspector] private float _lapTime;
     [SerializeField] [HideInInspector] private Vector3 _vel;
-    [SerializeField] [HideInInspector] private Vector3 _velRot;
     [SerializeField] [HideInInspector] private bool _isOnTrack;
     [SerializeField] [HideInInspector] private Rigidbody _rigidbody;
 
     [Header("Movement")] [SerializeField] public List<AxleInfo> axleInfos;
-
     [SerializeField] [HideInInspector] public float inputAcceleration;
     [SerializeField] [HideInInspector] public float inputSteering;
     [SerializeField] [HideInInspector] public float inputBrake;
@@ -87,844 +75,370 @@ public class CarController : NetworkBehaviour
     public CarState State { get; private set; }
     public int ID { get; private set; }
     public bool RubberBand { get; private set; } = true;
-    public bool Interpolation { get; private set; } = true;
+    
+    // --- CHANGED: Renamed Interpolation to UseDeadReckoning ---
+    public bool UseDeadReckoning { get; set; } = true;
 
-    // --- Dead Reckoning configuration ---
-    [Header("Dead Reckoning")]
-    [SerializeField] private bool deadReckoningEnabled = true; // master switch
-    [SerializeField] private float snapThreshold = 8f; // world units: if predicted deviates more than this, snap to server pos
-    [SerializeField] private float correctionTime = 0.12f; // seconds to smoothly correct to server update
-    [SerializeField] private float maxExtrapolation = 0.5f; // max seconds to extrapolate
-    [SerializeField] private float extrapolationBlend = 0.15f; // blending factor towards predicted position
+    // --- DEAD RECKONING VARIABLES ---
+    [Header("Dead Reckoning Configuration")]
+    [SerializeField] private DeadReckoningMode currentDRMode = DeadReckoningMode.Linear;
+    [SerializeField] private float snapThreshold = 10f; 
+    
+    // Improvement Flags
+    private bool _useCubicSpline = false;
+    private bool _useAdaptiveThreshold = false;
+    private bool _useTimeSync = false;
 
-    private int Laps
-    {
-        get => _laps;
-        set
-        {
-            _laps = value;
-            OnLapsChangeEvent?.Invoke(value);
-        }
-    }
-    private int Speed
-    {
-        get => _networkSpeed.Value;
-        set => _networkSpeed.Value = value;
-    }
+    // Runtime DR State
+    private Vector3 _serverPos;
+    private Vector3 _serverVel;
+    private Vector3 _serverAcc;
+    private Vector3 _prevServerVel;
+    private float _lastServerRecvTime; 
+
+    // Time Sync
+    private float _timeOffset = 0f;
+    private const float SYNC_ALPHA = 0.05f; 
+
+    // Spline State
+    private Vector3 _p0, _p1, _t0, _t1; 
+    private float _splineDuration;
+    private float _splineTimer; 
+
+    // Metrics
+    private double _aeeSum = 0.0;
+    private long _aeeCount = 0;
+    private long _hitCount = 0;
+    private float hitThreshold = 0.5f;
+    private float _lastPacketLocalTime;
+    private List<float> _packetIntervals = new List<float>();
+
+    // Jerk calculation
+    Vector3 prevPos;
+    float prevVel;
+    float prevAcc;
+    [SerializeField] JerkCounter jerkCounter;
+
+    private int Laps { get => _laps; set { _laps = value; OnLapsChangeEvent?.Invoke(value); } }
+    private int Speed { get => _networkSpeed.Value; set => _networkSpeed.Value = value; }
     private bool IsRacing => State != CarState.Dead && State != CarState.Idle;
     private bool IsRace => GameManager.Instance.CLASSIF_STATES.Contains(NetworkPlayer.CurrentRace);
     private bool IsClassif => GameManager.Instance.RACE_STATES.Contains(NetworkPlayer.CurrentRace);
 
-    Vector3 prevPos;
-    float prevVel;
-    float prevAcc;
-    float highestJerk;
-
-    [SerializeField] JerkCounter jerkCounter;
-    [SerializeField] MovingAverage movingAverage;
-    [SerializeField] ExponentialMovingAverage exponentialMovingAverage;
-
-    // ---- Dead reckoning runtime state ----
-    private Vector3 _lastServerPos;
-    private Vector3 _lastServerVel;
-    private float _lastServerRecvTime;
-    private bool _hasServerState = false;
-    private Coroutine _correctionCoroutine;
-
-    private Vector3 correctionStartPos;
-    private Quaternion correctionStartRot;
-    private Vector3 correctionTargetPos;
-    private Quaternion correctionTargetRot;
-    private float correctionTimer = 0f;
-    private float correctionDuration = 0.12f;
-    private bool isCorrecting = false;
-
-
-    // --- Metrics for AEE / Hit% (paper-style) ---
-    [Header("Metrics")]
-    private float hitThreshold = 0.5f; // threshold used for hit% (same as g in the paper)
-    // Running accumulators (kept simple: accumulated error, count, hits)
-    private double _aeeSum = 0.0;
-    private long _aeeCount = 0;
-    private long _hitCount = 0;
-
-    // Exposed getters (optional)
-    public float CurrentAEE => _aeeCount > 0 ? (float)(_aeeSum / _aeeCount) : 0f;
-    public float CurrentHitPercentage => _aeeCount > 0 ? (_hitCount * 100f / _aeeCount) : 0f;
-
     #endregion Variables
 
     #region Delegates and Events
-
     public delegate void OnLapsChangeDelegate(int newVal);
-
     public event OnLapsChangeDelegate OnLapsChangeEvent;
 
-    private void OnSpeedChange(int oldVal, int newVal)
-    {
-        UIManager.Instance.gameKph.text = $"{newVal:0}";
-    }
-
-    private void OnLapsChange(int newVal)
-    {
+    private void OnSpeedChange(int oldVal, int newVal) { UIManager.Instance.gameKph.text = $"{newVal:0}"; }
+    private void OnLapsChange(int newVal) {
         if (newVal == 1) _lapTime = 0f;
-
-        // Get the lap time and display it
         _lapTime = GameManager.Instance.raceTime - _lapTime;
         UIManager.Instance.gameLapTime.text = GameManager.Instance.ConvertTimeToString(_lapTime);
-
-        // Check if the player has finished the race
         if (newVal.Equals(GameManager.Instance.NumLaps + 1)) SetPlayerEndGame();
-        // Or update the lap counter
-        else if (newVal <= GameManager.Instance.NumLaps + 1)
-            UIManager.Instance.gameLaps.text = $"{newVal}/{GameManager.Instance.NumLaps}";
+        else if (newVal <= GameManager.Instance.NumLaps + 1) UIManager.Instance.gameLaps.text = $"{newVal}/{GameManager.Instance.NumLaps}";
     }
-
-    private void OnPlayerLeft(NetworkPlayer networkPlayer)
-    {
-        // Win by default if the player is the only one left
-        if (NetworkPlayer.Equals(networkPlayer)) return;
-        if (RaceManager.Instance.players.Count == 1) SetPlayerEndGame();
-    }
-
-    private void OnScreenChange(AppScreen screen)
-    {
-        if (screen.Equals(AppScreen.Game))
-        {
+    private void OnPlayerLeft(NetworkPlayer networkPlayer) { if (NetworkPlayer.Equals(networkPlayer)) return; if (RaceManager.Instance.players.Count == 1) SetPlayerEndGame(); }
+    
+    private void OnScreenChange(AppScreen screen) {
+        if (screen.Equals(AppScreen.Game)) {
             if (IsServer && IsRace) GameManager.Instance.SpawnItemBox(APP_CONFIG.GAME.ITEM_BOXES_PER_RACE);
             else if (IsServer && IsClassif) GameManager.Instance.DespawnItemBox();
 
-            if (IsClassif || NetworkPlayer.CurrentRace.Equals(RaceState.Schedule))
-            {
-                UIManager.Instance.gameTitle.text = "Classification";
-                RocketPanel.SetActive(false);
-                SwitchToInvisibleExceptMeRpc();
-                MoveToPositionRpc(GameManager.Instance.CLASSIF_POS);
+            if (IsClassif || NetworkPlayer.CurrentRace.Equals(RaceState.Schedule)) {
+                UIManager.Instance.gameTitle.text = "Classification"; RocketPanel.SetActive(false); SwitchToInvisibleExceptMeRpc(); MoveToPositionRpc(GameManager.Instance.CLASSIF_POS);
+            } else {
+                UIManager.Instance.gameTitle.text = "Race"; RocketPanel.SetActive(true); SwitchVisibilityRpc(); MoveToPositionRpc(GameManager.Instance.RACE_POS[NetworkPlayer.StartPos]);
             }
-            else
-            {
-                UIManager.Instance.gameTitle.text = "Race";
-                RocketPanel.SetActive(true);
-                SwitchVisibilityRpc();
-                MoveToPositionRpc(GameManager.Instance.RACE_POS[NetworkPlayer.StartPos]);
-            }
-
             ResetStatsRpc();
-
-            NetworkPlayer.Location = "/game";
-            NetworkPlayer.FinishRawTime = 0f;
-            NetworkPlayer.Rockets = 0;
-            NetworkPlayer.HasFinished = false;
-            UIManager.Instance.SetNotificationCanvas(true, "WAITING FOR PLAYERS");
-            UIManager.Instance.gameLaps.text = "";
-            UIManager.Instance.matchSummaryController.HasFinished = false;
-            OnRocketChange(NetworkPlayer.Rockets);
-            StartCoroutine(CheckIsOnTrack());
-            
-            NetworkPlayer.IsReady = true;
+            NetworkPlayer.Location = "/game"; NetworkPlayer.FinishRawTime = 0f; NetworkPlayer.Rockets = 0; NetworkPlayer.HasFinished = false;
+            UIManager.Instance.SetNotificationCanvas(true, "WAITING FOR PLAYERS"); UIManager.Instance.gameLaps.text = ""; UIManager.Instance.matchSummaryController.HasFinished = false;
+            OnRocketChange(NetworkPlayer.Rockets); StartCoroutine(CheckIsOnTrack()); NetworkPlayer.IsReady = true;
         }
-        
         if (screen.Equals(AppScreen.Room)) NetworkPlayer.Location = "/room";
     }
 
     [Rpc(SendTo.Everyone)]
-    private void MoveToPositionRpc(Vector3 pos)
-    {
-        _rigidbody.isKinematic = true;
-        transform.position = pos;
-        transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+    private void MoveToPositionRpc(Vector3 pos) {
+        _rigidbody.isKinematic = true; transform.position = pos; transform.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+        _serverPos = pos;
+        ResetSplineState(pos); 
     }
 
     [Rpc(SendTo.Everyone)]
-    private void ResetStatsRpc()
-    {
-        Laps = 0;
-        NetworkPlayer.lastLapPos = 0f;
-        NetworkPlayer.checkpointAchieved = false;
-        NetworkPlayer.RubberBandCoefficient = 1f;
-
-        // Reset AEE/Hit counters
-        _aeeSum = 0.0;
-        _aeeCount = 0;
-        _hitCount = 0;
-
-        // Clear UI if available
-        if (UIManager.Instance != null)
-        {
-            try
-            {
-                UIManager.Instance.averageExportError.text = "0.00";
-                UIManager.Instance.hitPercentage.text = "0.0%";
-            }
-            catch (Exception) { }
-        }
+    private void ResetStatsRpc() {
+        Laps = 0; NetworkPlayer.lastLapPos = 0f; NetworkPlayer.checkpointAchieved = false; NetworkPlayer.RubberBandCoefficient = 1f;
+        _aeeSum = 0.0; _aeeCount = 0; _hitCount = 0; _packetIntervals.Clear();
+        if (UIManager.Instance != null) { try { UIManager.Instance.averageExportError.text = "0.00"; UIManager.Instance.hitPercentage.text = "0.0%"; UIManager.Instance.jitterEstimate.text = "0ms"; UIManager.Instance.instantError.text = "0.00m"; } catch (Exception) { } }
     }
-    
-    private void OnRocketChange(int newVal)
-    {
-        rocketTag.text = newVal.ToString();
-    }
-    
-    private void OnGameStateChange(GameState oldState, GameState newState)
-    {
-        if (newState.Equals(GameState.Started))
-        {
-            if (IsOwner) NetworkPlayer.IsRacing = true;
-            State = CarState.Vulnerable;
-            _rigidbody.isKinematic = false;
-        }
-    }
-    
-    public void OnRocketHit()
-    {
-        StartCoroutine(InitiateDeath());
-        StartCoroutine(SwitchVulnerability(3.25f, toVulnerable: false));
-        StartCoroutine(SwitchVulnerability(8f));
-    }
-
+    private void OnRocketChange(int newVal) { rocketTag.text = newVal.ToString(); }
+    private void OnGameStateChange(GameState oldState, GameState newState) { if (newState.Equals(GameState.Started)) { if (IsOwner) NetworkPlayer.IsRacing = true; State = CarState.Vulnerable; _rigidbody.isKinematic = false; } }
+    public void OnRocketHit() { StartCoroutine(InitiateDeath()); StartCoroutine(SwitchVulnerability(3.25f, toVulnerable: false)); StartCoroutine(SwitchVulnerability(8f)); }
     #endregion
 
     #region Unity Callbacks
-
-    public override void OnNetworkDespawn()
-    {
-        OnLapsChangeEvent -= NetworkPlayer.OnLapsChange;
-        GameManager.Instance.OnGameStateChange -= OnGameStateChange;
-                
-        if (IsOwner)
-        {
-            NetworkPlayer.OnRocketChangeEvent -= OnRocketChange;
-            _networkSpeed.OnValueChanged -= OnSpeedChange;
-            OnLapsChangeEvent -= OnLapsChange;
-            RaceManager.Instance.OnPlayerLeft -= OnPlayerLeft;
-            UIManager.Instance.gameRespawn.onClick.RemoveListener(RespawnInProjPosRpc);
-            UIManager.Instance.gameInterpolation.onValueChanged.RemoveListener(value => Interpolation = value);
-            EventManager.Instance.ScreenChange.RemoveListener(OnScreenChange);
+    public override void OnNetworkDespawn() {
+        OnLapsChangeEvent -= NetworkPlayer.OnLapsChange; GameManager.Instance.OnGameStateChange -= OnGameStateChange;
+        if (IsOwner) { 
+            NetworkPlayer.OnRocketChangeEvent -= OnRocketChange; _networkSpeed.OnValueChanged -= OnSpeedChange; 
+            OnLapsChangeEvent -= OnLapsChange; RaceManager.Instance.OnPlayerLeft -= OnPlayerLeft; 
+            UIManager.Instance.gameRespawn.onClick.RemoveListener(RespawnInProjPosRpc); 
+            // Removed old Interpolation listener
+            EventManager.Instance.ScreenChange.RemoveListener(OnScreenChange); 
         }
-
-        // Unsubscribe dead reckoning listener
-        if (!IsServer)
-        {
-            try
-            {
-                _networkData.OnValueChanged -= OnNetworkDataChanged;
-            }
-            catch (Exception) { }
-        }
+        if (!IsServer) _networkData.OnValueChanged -= OnNetworkDataChanged;
     }
-
-    public override void OnNetworkSpawn()
-    {
-        State = CarState.Idle;
-
-        _rigidbody = GetComponent<Rigidbody>();
-        _rigidbody.isKinematic = true;
-
-        _originalMaterials = new List<Material[]>();
-        foreach (var mesh in carMeshes) _originalMaterials.Add(mesh.materials);
-
+    public override void OnNetworkSpawn() {
+        State = CarState.Idle; _rigidbody = GetComponent<Rigidbody>(); _rigidbody.isKinematic = true;
+        _originalMaterials = new List<Material[]>(); foreach (var mesh in carMeshes) _originalMaterials.Add(mesh.materials);
         var networkObjects = FindObjectsOfType<NetworkObject>();
-        foreach (var networkObject in networkObjects)
-            // Find the car owner to assign the player to the car
-            if (networkObject.IsPlayerObject && networkObject.OwnerClientId == OwnerClientId)
-            {
-                NetworkPlayer = networkObject.gameObject.GetComponent<NetworkPlayer>();
-
-                NetworkPlayer.car = gameObject;
-                NetworkPlayer.carName = carName;
-                ID = NetworkPlayer.ID;
-
-                OnLapsChangeEvent += NetworkPlayer.OnLapsChange;
-                GameManager.Instance.OnGameStateChange += OnGameStateChange;
-                
-                if (IsOwner)
-                {
-                    RocketPanel.SetActive(true);
-                    NetworkPlayer.OnRocketChangeEvent += OnRocketChange;
-                    _networkSpeed.OnValueChanged += OnSpeedChange;
-                    OnLapsChangeEvent += OnLapsChange;
-                    RaceManager.Instance.OnPlayerLeft += OnPlayerLeft;
-                    UIManager.Instance.gameRespawn.onClick.AddListener(RespawnInProjPosRpc);
-                    UIManager.Instance.gameInterpolation.onValueChanged.AddListener(value => Interpolation = value);
-                    EventManager.Instance.ScreenChange.AddListener(OnScreenChange);
+        foreach (var networkObject in networkObjects) if (networkObject.IsPlayerObject && networkObject.OwnerClientId == OwnerClientId) {
+                NetworkPlayer = networkObject.gameObject.GetComponent<NetworkPlayer>(); NetworkPlayer.car = gameObject; NetworkPlayer.carName = carName; ID = NetworkPlayer.ID;
+                OnLapsChangeEvent += NetworkPlayer.OnLapsChange; GameManager.Instance.OnGameStateChange += OnGameStateChange;
+                if (IsOwner) { 
+                    RocketPanel.SetActive(true); NetworkPlayer.OnRocketChangeEvent += OnRocketChange; _networkSpeed.OnValueChanged += OnSpeedChange; 
+                    OnLapsChangeEvent += OnLapsChange; RaceManager.Instance.OnPlayerLeft += OnPlayerLeft; 
+                    UIManager.Instance.gameRespawn.onClick.AddListener(RespawnInProjPosRpc); 
+                    // Old Interpolation listener logic moved to UIManager
+                    EventManager.Instance.ScreenChange.AddListener(OnScreenChange); 
                 }
-
-                // Set default values
-                SetPlayerTag(-1, NetworkPlayer.Name);
-                OnRocketChange(NetworkPlayer.Rockets);
-                SetMainMeshMaterialColor(NetworkPlayer.CarColor);
-                EventManager.Instance.RaisePlayersCarFound(ID);
+                SetPlayerTag(-1, NetworkPlayer.Name); OnRocketChange(NetworkPlayer.Rockets); SetMainMeshMaterialColor(NetworkPlayer.CarColor); EventManager.Instance.RaisePlayersCarFound(ID);
             }
-
         if (NetworkPlayer == null) throw new Exception("Player not found!");
-
-        // Subscribe to network data changes (used for dead reckoning)
-        if (!IsServer)
-        {
-            _networkData.OnValueChanged += OnNetworkDataChanged;
+        if (!IsServer) {
+             _networkData.OnValueChanged += OnNetworkDataChanged;
+             ResetSplineState(transform.position); 
+        }
+    }
+    
+    public void SetDRMode(DeadReckoningMode mode) { currentDRMode = mode; }
+    public void SetImprovement(string option, bool value) {
+        switch (option) {
+            case "Spline": 
+                _useCubicSpline = value; 
+                if(_useCubicSpline) ResetSplineState(transform.position);
+                break;
+            case "Adaptive": _useAdaptiveThreshold = value; break;
+            case "TimeSync": _useTimeSync = value; break;
         }
     }
 
-    // Dead reckoning: when a new network state arrives, estimate velocity and optionally smoothly correct position
-    private void OnNetworkDataChanged(PosAndRotNetworkData oldVal, PosAndRotNetworkData newVal)
-    {
-        // ignore zeros (server uses Vector3.zero as reset flag)
+    private void ResetSplineState(Vector3 pos) {
+        _p0 = pos; _p1 = pos;
+        _t0 = Vector3.zero; _t1 = Vector3.zero;
+        _serverPos = pos; _splineTimer = 0;
+        _vel = Vector3.zero;
+    }
+
+    // --- LOGIC ---
+    private void OnNetworkDataChanged(PosAndRotNetworkData oldVal, PosAndRotNetworkData newVal) {
         if (newVal.Position == Vector3.zero) return;
-
         float now = Time.time;
+        float packetTime = _useTimeSync ? newVal.Timestamp : now;
 
-        if (_hasServerState)
-        {
-            float dt = now - _lastServerRecvTime;
-            if (dt > 0.0001f)
-            {
-                // estimated velocity of the server-owned rigidbody between updates
-                Vector3 newVel = (newVal.Position - _lastServerPos) / dt;
-                float velAlpha = 0.25f; // smoothing factor
-                _lastServerVel = Vector3.Lerp(_lastServerVel, newVel, velAlpha);
+        // Time Sync Logic
+        if (_useTimeSync) {
+            float rtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID) / 1000f;
+            if (rtt >= 0) {
+                float estimatedServerNow = newVal.Timestamp + rtt / 2f;
+                float currentOffset = estimatedServerNow - now;
+                if (_timeOffset == 0f) _timeOffset = currentOffset;
+                else _timeOffset = Mathf.Lerp(_timeOffset, currentOffset, SYNC_ALPHA);
             }
         }
-        else
-        {
-            _lastServerVel = Vector3.zero;
-            _hasServerState = true;
-        }
+        
+        float dt = packetTime - _lastServerRecvTime;
+        if (!_useTimeSync) dt = now - _lastServerRecvTime;
+        if (dt < 0.001f) dt = 0.05f;
 
-        _lastServerPos = newVal.Position;
-        _lastServerRecvTime = now;
+        _lastServerRecvTime = packetTime;
 
-        // --- Update AEE / Hit% metrics (we measure how far the client display was from server state when update arrives)
-        try
-        {
-            float error = Vector3.Distance(transform.position, newVal.Position);
-            _aeeSum += error;
-            _aeeCount++;
-            if (error <= hitThreshold) _hitCount++;
+        // Metrics 
+        float interval = now - _lastPacketLocalTime; _lastPacketLocalTime = now;
+        if (_packetIntervals.Count >= 20) _packetIntervals.RemoveAt(0);
+        _packetIntervals.Add(interval);
+        float jitter = CalculateStdDev(_packetIntervals) * 1000f;
 
-            // Update UI (if present)
-            if (UIManager.Instance != null)
-            {
-                UIManager.Instance.averageExportError.text = $"{(float)(_aeeSum / Math.Max(1, _aeeCount)):0.00}";
-                UIManager.Instance.hitPercentage.text = $"{(_aeeCount > 0 ? (_hitCount * 100f / _aeeCount) : 0f):0.0}%";
+        // --- CUBIC SPLINE OPTIMIZATION ---
+        if (_useCubicSpline) {
+            _splineTimer = 0f;
+            float avgInterval = 0.05f;
+            if(_packetIntervals.Count > 0) {
+                foreach(float v in _packetIntervals) avgInterval += v;
+                avgInterval /= _packetIntervals.Count;
             }
-        }
-        catch (Exception) { }
+            _splineDuration = Mathf.Max(avgInterval, dt * 0.8f); 
 
+            float rtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID) / 1000f;
+            if (rtt > 0.15f) _splineDuration += 0.05f;
 
-        // If the local prediction is far off, start a smooth correction to avoid visible teleport
-        isCorrecting = false;
-        float dist = Vector3.Distance(transform.position, _lastServerPos);
-
-        // If too far, snap immediately to avoid huge mismatch (can be tuned)
-        if (dist > snapThreshold * 3f)
-        {
+            _p0 = transform.position; 
+            _p1 = newVal.Position;
             
-            // transform.position = _lastServerPos;
-            // transform.rotation = Quaternion.Euler(newVal.Rotation);
-        }
-        else
-        {
-            correctionStartPos = transform.position;
-            correctionStartRot = transform.rotation;
-            correctionTargetPos = _lastServerPos;
-            correctionTargetRot = Quaternion.Euler(newVal.Rotation);
+            // Tangent Stabilization
+            Vector3 linearVelocity = (_p1 - _p0) / _splineDuration;
+            Vector3 rawServerVel = Vector3.zero;
+            if (dt > 0.0001f) rawServerVel = (newVal.Position - _serverPos) / dt;
+            _serverVel = Vector3.Lerp(_serverVel, rawServerVel, 0.5f); 
 
-            correctionTimer = 0f;
-            correctionDuration = correctionTime;
-            isCorrecting = true;
-        }
-    }
+            Vector3 startTangentVel = Vector3.Lerp(_vel, linearVelocity, 0.6f);
+            Vector3 endTangentVel = Vector3.Lerp(_serverVel, linearVelocity, 0.6f);
 
-    private IEnumerator SmoothCorrection(Vector3 targetPos, Quaternion targetRot, float duration)
-    {
-        float t = 0f;
-        Vector3 startPos = transform.position;
-        Quaternion startRot = transform.rotation;
+            _t0 = startTangentVel * _splineDuration;
+            _t1 = endTangentVel * _splineDuration;
 
-        // If duration is zero or negative, immediate correction
-        if (duration <= 0f)
-        {
-            transform.position = targetPos;
-            transform.rotation = targetRot;
-            yield break;
-        }
-
-        while (t < duration)
-        {
-            float alpha = t / duration;
-            transform.position = Vector3.Lerp(startPos, targetPos, alpha);
-            transform.rotation = Quaternion.Slerp(startRot, targetRot, alpha);
-            t += Time.deltaTime;
-            yield return null;
-        }
-
-        transform.position = targetPos;
-        transform.rotation = targetRot;
-    }
-
-    public void FixedUpdate()
-    {
-        // If the car is the server, move the car
-        if (IsServer)
-        {
-            if (!_rigidbody.isKinematic)
-            {
-                inputSteering = Mathf.Clamp(inputSteering, -1, 1);
-                inputAcceleration = Mathf.Clamp(inputAcceleration, -1, 1);
-                inputBrake = Mathf.Clamp(inputBrake, 0, 1);
-
-                var steering = _maxSteeringAngle * inputSteering;
-
-                foreach (var axleInfo in axleInfos)
-                {
-                    if (axleInfo.steering)
-                    {
-                        axleInfo.leftWheel.steerAngle = steering;
-                        axleInfo.rightWheel.steerAngle = steering;
-                    }
-
-                    if (axleInfo.motor)
-                    {
-                        if (inputAcceleration > float.Epsilon)
-                        {
-                            _forwardMotorTorqueRB = RubberBand
-                                ? _forwardMotorTorque * NetworkPlayer.RubberBandCoefficient
-                                : _forwardMotorTorque;
-                            axleInfo.leftWheel.motorTorque = _forwardMotorTorqueRB;
-                            axleInfo.leftWheel.brakeTorque = 0f;
-                            axleInfo.rightWheel.motorTorque = _forwardMotorTorqueRB;
-                            axleInfo.rightWheel.brakeTorque = 0f;
-                        }
-
-                        if (inputAcceleration < -float.Epsilon)
-                        {
-                            _backwardMotorTorqueRB = RubberBand
-                                ? -_backwardMotorTorque * NetworkPlayer.RubberBandCoefficient
-                                : -_backwardMotorTorque;
-                            axleInfo.leftWheel.motorTorque = _backwardMotorTorqueRB;
-                            axleInfo.leftWheel.brakeTorque = 0f;
-                            axleInfo.rightWheel.motorTorque = _backwardMotorTorqueRB;
-                            axleInfo.rightWheel.brakeTorque = 0f;
-                        }
-
-                        if (Math.Abs(inputAcceleration) < float.Epsilon)
-                        {
-                            axleInfo.leftWheel.motorTorque = 0f;
-                            axleInfo.leftWheel.brakeTorque = _engineBrake;
-                            axleInfo.rightWheel.motorTorque = 0f;
-                            axleInfo.rightWheel.brakeTorque = _engineBrake;
-                        }
-
-                        if (inputBrake > 0f)
-                        {
-                            axleInfo.leftWheel.brakeTorque = _footBrake;
-                            axleInfo.rightWheel.brakeTorque = _footBrake;
-                        }
-                    }
-
-                    ApplyLocalPositionToVisuals(axleInfo.leftWheel);
-                    ApplyLocalPositionToVisuals(axleInfo.rightWheel);
-                }
-
-                SteerHelper();
-                SpeedLimiter();
-                AddDownForce();
-                TractionControl();
-
-                // Save the car position and rotation for the client
-                _networkData.Value = new PosAndRotNetworkData()
-                {
-                    Position = transform.position,
-                    Rotation = transform.rotation.eulerAngles
-                };
+            float dist = Vector3.Distance(_p0, _p1);
+            if (dist > 0.01f) {
+                _t0 = Vector3.ClampMagnitude(_t0, dist * 1.5f); 
+                _t1 = Vector3.ClampMagnitude(_t1, dist * 1.5f);
             }
-            // If the car is kinematic, reset the car position and rotation: it may give random values
+        }
+        else {
+            Vector3 newVel = Vector3.zero;
+            if (dt > 0.0001f) newVel = (newVal.Position - _serverPos) / dt;
+            if (dt > 0.0001f) _serverAcc = (newVel - _prevServerVel) / dt;
+            _prevServerVel = _serverVel;
+            _serverVel = Vector3.Lerp(_serverVel, newVel, 0.5f);
+        }
+
+        _serverPos = newVal.Position;
+
+        // Metrics & UI
+        float error = Vector3.Distance(transform.position, newVal.Position);
+        _aeeSum += error; _aeeCount++; if (error <= hitThreshold) _hitCount++;
+        
+        if (UIManager.Instance != null) { try { UIManager.Instance.averageExportError.text = $"AEE: {(_aeeSum / Math.Max(1, _aeeCount)):F2}"; UIManager.Instance.hitPercentage.text = $"Hit: {(_aeeCount > 0 ? (_hitCount * 100f / _aeeCount) : 0f):F1}%"; UIManager.Instance.jitterEstimate.text = $"Jitter: {jitter:F0}ms"; UIManager.Instance.instantError.text = $"Err: {error:F2}m"; } catch {} }
+
+        // Adaptive Threshold
+        float currentThreshold = snapThreshold;
+        if (_useAdaptiveThreshold) {
+            float rtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID) / 1000f;
+            currentThreshold = 2.0f + (1.5f * rtt) + (0.2f * _vel.magnitude);
+        }
+
+        if (error > currentThreshold) {
+            transform.position = _serverPos;
+            if (_useCubicSpline) ResetSplineState(_serverPos); 
+        }
+    }
+
+    private float CalculateStdDev(List<float> values) { if (values.Count <= 1) return 0; float avg = 0; foreach(var v in values) avg += v; avg /= values.Count; float sumSq = 0; foreach(var v in values) sumSq += (v - avg) * (v - avg); return Mathf.Sqrt(sumSq / (values.Count - 1)); }
+
+    public void FixedUpdate() {
+        if (IsServer) {
+            if (!_rigidbody.isKinematic) {
+                inputSteering = Mathf.Clamp(inputSteering, -1, 1); inputAcceleration = Mathf.Clamp(inputAcceleration, -1, 1); inputBrake = Mathf.Clamp(inputBrake, 0, 1);
+                var steering = _maxSteeringAngle * inputSteering;
+                foreach (var axleInfo in axleInfos) {
+                    if (axleInfo.steering) { axleInfo.leftWheel.steerAngle = steering; axleInfo.rightWheel.steerAngle = steering; }
+                    if (axleInfo.motor) {
+                        if (inputAcceleration > float.Epsilon) { _forwardMotorTorqueRB = RubberBand ? _forwardMotorTorque * NetworkPlayer.RubberBandCoefficient : _forwardMotorTorque; axleInfo.leftWheel.motorTorque = _forwardMotorTorqueRB; axleInfo.leftWheel.brakeTorque = 0f; axleInfo.rightWheel.motorTorque = _forwardMotorTorqueRB; axleInfo.rightWheel.brakeTorque = 0f; }
+                        if (inputAcceleration < -float.Epsilon) { _backwardMotorTorqueRB = RubberBand ? -_backwardMotorTorque * NetworkPlayer.RubberBandCoefficient : -_backwardMotorTorque; axleInfo.leftWheel.motorTorque = _backwardMotorTorqueRB; axleInfo.leftWheel.brakeTorque = 0f; axleInfo.rightWheel.motorTorque = _backwardMotorTorqueRB; axleInfo.rightWheel.brakeTorque = 0f; }
+                        if (Math.Abs(inputAcceleration) < float.Epsilon) { axleInfo.leftWheel.motorTorque = 0f; axleInfo.leftWheel.brakeTorque = _engineBrake; axleInfo.rightWheel.motorTorque = 0f; axleInfo.rightWheel.brakeTorque = _engineBrake; }
+                        if (inputBrake > 0f) { axleInfo.leftWheel.brakeTorque = _footBrake; axleInfo.rightWheel.brakeTorque = _footBrake; }
+                    }
+                    ApplyLocalPositionToVisuals(axleInfo.leftWheel); ApplyLocalPositionToVisuals(axleInfo.rightWheel);
+                }
+                SteerHelper(); SpeedLimiter(); AddDownForce(); TractionControl();
+                _networkData.Value = new PosAndRotNetworkData() { Position = transform.position, Rotation = transform.rotation.eulerAngles, Timestamp = Time.time };
+            } else { _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero }; }
+        }
+        // --- CLIENT PREDICTION ---
+        else if (IsClient && !_rigidbody.isKinematic && _networkData.Value.Position != Vector3.zero) {
+            
+            // CHECK: NẾU KHÔNG DÙNG DEAD RECKONING THÌ SNAP
+            if (!UseDeadReckoning)
+            {
+                // RAW SNAP: Không nội suy, không dự đoán
+                _rigidbody.MovePosition(_serverPos);
+                _rigidbody.MoveRotation(Quaternion.Euler(_networkData.Value.Rotation));
+            }
             else
             {
-                _networkData.Value = new PosAndRotNetworkData()
-                {
-                    Position = Vector3.zero,
-                    Rotation = Vector3.zero
-                };
+                // LOGIC DEAD RECKONING BÌNH THƯỜNG
+                if (_useCubicSpline) {
+                    _splineTimer += Time.fixedDeltaTime;
+                    float u = _splineTimer / _splineDuration;
+                    if (u <= 1.0f) {
+                        float u2 = u * u; float u3 = u2 * u;
+                        float h1 = 2 * u3 - 3 * u2 + 1;
+                        float h2 = -2 * u3 + 3 * u2;
+                        float h3 = u3 - 2 * u2 + u;
+                        float h4 = u3 - u2;
+                        
+                        Vector3 nextPos = h1 * _p0 + h2 * _p1 + h3 * _t0 + h4 * _t1;
+                        _rigidbody.MovePosition(nextPos);
 
-                // _networkWheelYRot.Value = 0f;
-            }
-        }
-        // If the car is in the client, interpolate the car position and rotation
-        else if (!_rigidbody.isKinematic && !(_networkData.Value.Position == Vector3.zero))
-        {
-            if (deadReckoningEnabled && _hasServerState)
-            {
-                // 1) Prediction (always run)
-                float age = Time.time - _lastServerRecvTime;
-                float clampedAge = Mathf.Min(age, maxExtrapolation);
-                Vector3 predictedPos = _lastServerPos + _lastServerVel * clampedAge;
-                Quaternion predictedRot = Quaternion.Euler(_networkData.Value.Rotation);
-                Vector3 blended;
-                Quaternion blendedRot;
-
-                if (Vector3.Distance(transform.position, _lastServerPos) > snapThreshold * 3f)
-                {
-                    blended = Vector3.SmoothDamp(transform.position, _lastServerPos, ref _vel, extrapolationBlend);
-                    blendedRot = Quaternion.Slerp(transform.rotation, predictedRot, extrapolationBlend);
+                        float d1 = 6 * u2 - 6 * u; float d2 = -6 * u2 + 6 * u; float d3 = 3 * u2 - 4 * u + 1; float d4 = 3 * u2 - 2 * u;
+                        _vel = (d1 * _p0 + d2 * _p1 + d3 * _t0 + d4 * _t1) / _splineDuration;
+                    } else {
+                        Vector3 nextPos = transform.position + _vel * Time.fixedDeltaTime;
+                        _rigidbody.MovePosition(nextPos);
+                    }
+                } else {
+                    float now = Time.time;
+                    float serverTimeNow = _useTimeSync ? (now + _timeOffset) : now;
+                    float predictTime = Mathf.Clamp(serverTimeNow - _lastServerRecvTime, 0f, 0.5f);
+                    Vector3 targetPos = transform.position;
+                    switch (currentDRMode) {
+                        case DeadReckoningMode.None: targetPos = _serverPos; break;
+                        case DeadReckoningMode.Linear: targetPos = _serverPos + _serverVel * predictTime; break;
+                        case DeadReckoningMode.Quadratic: targetPos = _serverPos + _serverVel * predictTime + 0.5f * _serverAcc * predictTime * predictTime * 0.8f; break;
+                    }
+                    Vector3 smoothPos = Vector3.SmoothDamp(transform.position, targetPos, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME, float.PositiveInfinity, Time.fixedDeltaTime);
+                    _rigidbody.MovePosition(smoothPos);
                 }
                 
-                else
-                {
-                    blended = Vector3.SmoothDamp(transform.position, predictedPos, ref _vel, extrapolationBlend);
-                    blendedRot = Quaternion.Slerp(transform.rotation, predictedRot, extrapolationBlend);
-                }
-                _rigidbody.MovePosition(blended);
-                _rigidbody.MoveRotation(blendedRot);
+                var targetRot = Quaternion.Euler(_networkData.Value.Rotation);
+                _rigidbody.MoveRotation(Quaternion.Slerp(transform.rotation, targetRot, Time.fixedDeltaTime * 10f));
             }
-            else
-            {
-                if (Interpolation)
-                {
-                    var targetPosition =
-                        Vector3.SmoothDamp(transform.position, _networkData.Value.Position, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
-                    var targetRotation = Quaternion.Euler(
-                        Mathf.SmoothDampAngle(transform.eulerAngles.x, _networkData.Value.Rotation.x, ref _velRot.x,
-                            APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
-                        Mathf.SmoothDampAngle(transform.eulerAngles.y, _networkData.Value.Rotation.y, ref _velRot.y,
-                            APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME),
-                        Mathf.SmoothDampAngle(transform.eulerAngles.z, _networkData.Value.Rotation.z, ref _velRot.z,
-                            APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME));
-
-                    _rigidbody.MovePosition(targetPosition);
-                    _rigidbody.MoveRotation(targetRotation);
-                }
-                else
-                {
-                    _rigidbody.MovePosition(_networkData.Value.Position);
-                    _rigidbody.MoveRotation(Quaternion.Euler(_networkData.Value.Rotation));
-                }
-            }
-
-            // Jerk computation: get positions after MovePosition applied would be next physics tick,
-            // but you can compute visual metrics using transform as before if acceptable.
-            float vel = Vector3.Distance(transform.position, prevPos) / Time.fixedDeltaTime;
-            prevPos = transform.position;
-            float acc = Mathf.Abs(vel - prevVel) / Time.fixedDeltaTime;
-            prevVel = vel;
-            float jerk = Mathf.Abs(acc - prevAcc) / Time.fixedDeltaTime;
-            prevAcc = acc;
-            float jerkSmooth = jerkCounter.Update(jerk);
-            UIManager.Instance.carJerk.text = $"{(int)jerkSmooth}";
+            
+            CalculateJerk();
         }
     }
     
-    public void Update()
-    {
-        if (IsServer && IsSpawned)
-        {
-            var iSpeed = Mathf.FloorToInt(_rigidbody.velocity.magnitude);
-            if (iSpeed != Speed) Speed = iSpeed;
-        }
-    }
+    public void Update() { if (IsServer && IsSpawned) { var iSpeed = Mathf.FloorToInt(_rigidbody.velocity.magnitude); if (iSpeed != Speed) Speed = iSpeed; } }
 
+    private void CalculateJerk() {
+        float dt = Time.fixedDeltaTime; if (dt <= 0) return;
+        float vel = Vector3.Distance(transform.position, prevPos) / dt; prevPos = transform.position;
+        float acc = Mathf.Abs(vel - prevVel) / dt; prevVel = vel;
+        float jerk = Mathf.Abs(acc - prevAcc) / dt; prevAcc = acc;
+        if(jerkCounter != null && UIManager.Instance.carJerk != null) UIManager.Instance.carJerk.text = $"Jerk: {(int)jerkCounter.Update(jerk)}";
+    }
     #endregion
 
-    #region States
-
-    public IEnumerator SwitchVulnerability(float time, bool toVulnerable = true)
-    {
-        yield return new WaitForSeconds(time);
-        
-        State = toVulnerable ? CarState.Vulnerable : CarState.Invincible;
-        _rigidbody.excludeLayers = toVulnerable ? 0 : LayerMask.GetMask("Player");
-
-        if (toVulnerable)
-        {
-            for (var i = 0; i < carMeshes.Count; i++) carMeshes[i].materials = _originalMaterials[i];
-        }
-        else
-        {
-            foreach (var mesh in carMeshes)
-            {
-                var materials = mesh.materials;
-                for (var i = 0; i < materials.Length; i++) materials[i] = translucentMaterial;
-                mesh.materials = materials;
-            }
-
-            StartCoroutine(ShineWhileInvincible());
-        }
+    #region States & Death & Movement
+    // ... (Giữ nguyên các hàm SwitchVulnerability, ShineWhileInvincible, SwitchVisibilityRpc...)
+    public IEnumerator SwitchVulnerability(float time, bool toVulnerable = true) {
+        yield return new WaitForSeconds(time); State = toVulnerable ? CarState.Vulnerable : CarState.Invincible; _rigidbody.excludeLayers = toVulnerable ? 0 : LayerMask.GetMask("Player");
+        if (toVulnerable) for (var i = 0; i < carMeshes.Count; i++) carMeshes[i].materials = _originalMaterials[i];
+        else { foreach (var mesh in carMeshes) { var materials = mesh.materials; for (var i = 0; i < materials.Length; i++) materials[i] = translucentMaterial; mesh.materials = materials; } StartCoroutine(ShineWhileInvincible()); }
     }
-
-    // Car meshes will shine and transparency will change while the car is invincible.
-    private IEnumerator ShineWhileInvincible()
-    {
-        const float DURATION = 0.25f;
-        const float MAX_ALPHA = 0.85f;
-        const float MIN_ALPHA = 0.15f;
-
-        while (CarState.Invincible.Equals(State))
-        {
-            var newAlpha = MIN_ALPHA + (MAX_ALPHA - MIN_ALPHA) * Mathf.Abs(Mathf.Sin(Time.time / DURATION));
-
-            foreach (var mesh in carMeshes)
-            {
-                var materials = mesh.materials;
-                foreach (var material in materials)
-                {
-                    var color = material.color;
-                    color.a = newAlpha;
-                    material.color = color;
-                }
-
-                mesh.materials = materials;
-            }
-
-            yield return null;
-        }
-
-        foreach (var mesh in carMeshes)
-        {
-            var materials = mesh.materials;
-            foreach (var material in materials)
-            {
-                var color = material.color;
-                color.a = MAX_ALPHA;
-                material.color = color;
-            }
-
-            mesh.materials = materials;
-        }
+    private IEnumerator ShineWhileInvincible() {
+        const float DURATION = 0.25f; const float MAX_ALPHA = 0.85f; const float MIN_ALPHA = 0.15f;
+        while (CarState.Invincible.Equals(State)) { var newAlpha = MIN_ALPHA + (MAX_ALPHA - MIN_ALPHA) * Mathf.Abs(Mathf.Sin(Time.time / DURATION)); foreach (var mesh in carMeshes) { var materials = mesh.materials; foreach (var material in materials) { var color = material.color; color.a = newAlpha; material.color = color; } mesh.materials = materials; } yield return null; }
+        foreach (var mesh in carMeshes) { var materials = mesh.materials; foreach (var material in materials) { var color = material.color; color.a = MAX_ALPHA; material.color = color; } mesh.materials = materials; }
     }
-
-    [Rpc(SendTo.Everyone)]
-    private void SwitchVisibilityRpc(bool toVisible = true)
-    {
-        PlayerPanel.SetActive(toVisible);
-        _rigidbody.excludeLayers = toVisible ? 0: LayerMask.GetMask("Player");
-        foreach (var mesh in carMeshes) mesh.enabled = toVisible;
-    }
-
-    [Rpc(SendTo.NotMe)]
-    private void SwitchToInvisibleExceptMeRpc()
-    {
-        PlayerPanel.SetActive(false);
-        _rigidbody.excludeLayers = LayerMask.GetMask("Player");
-        foreach (var mesh in carMeshes) mesh.enabled = false;
-    }
-
-    #endregion
-
-    #region Car properties setters
-
-    private void SetPlayerEndGame()
-    {
-        // Set player end game state adn disable UI elements
-        State = CarState.Idle;
-        StopCoroutine(CheckIsOnTrack());
-        MoveToPositionRpc(GameManager.Instance.GetPlayerPosById(ID));
-
-        NetworkPlayer.FinishRawTime = GameManager.Instance.raceTime;
-        NetworkPlayer.HasFinished = true;
-        UIManager.Instance.gameOverallTime.text = "--:--.---";
-        UIManager.Instance.gameLapTime.text = "--:--.---";
-        UIManager.Instance.matchSummaryController.HasFinished = true;
-        EventManager.Instance.RaiseScreenChange(AppScreen.EndGame);
-    }
+    [Rpc(SendTo.Everyone)] private void SwitchVisibilityRpc(bool toVisible = true) { PlayerPanel.SetActive(toVisible); _rigidbody.excludeLayers = toVisible ? 0: LayerMask.GetMask("Player"); foreach (var mesh in carMeshes) mesh.enabled = toVisible; }
+    [Rpc(SendTo.NotMe)] private void SwitchToInvisibleExceptMeRpc() { PlayerPanel.SetActive(false); _rigidbody.excludeLayers = LayerMask.GetMask("Player"); foreach (var mesh in carMeshes) mesh.enabled = false; }
     
-    public void SetMainMeshMaterialColor(Color color)
-    {
-        carMeshes[0].materials[1].color = color;
-    }
-
-    public void SetPlayerTag(int pos, string playerName)
-    {
-        playerTag.text = pos == -1 ? $"Ready | {NetworkPlayer.Name}" : $"{pos} | {playerName}";
-    }
-
-    #endregion
+    private void SetPlayerEndGame() { State = CarState.Idle; StopCoroutine(CheckIsOnTrack()); MoveToPositionRpc(GameManager.Instance.GetPlayerPosById(ID)); NetworkPlayer.FinishRawTime = GameManager.Instance.raceTime; NetworkPlayer.HasFinished = true; UIManager.Instance.gameOverallTime.text = "--:--.---"; UIManager.Instance.gameLapTime.text = "--:--.---"; UIManager.Instance.matchSummaryController.HasFinished = true; EventManager.Instance.RaiseScreenChange(AppScreen.EndGame); }
+    public void SetMainMeshMaterialColor(Color color) { carMeshes[0].materials[1].color = color; }
+    public void SetPlayerTag(int pos, string playerName) { playerTag.text = pos == -1 ? $"Ready | {NetworkPlayer.Name}" : $"{pos} | {playerName}"; }
     
-    #region Death
+    private IEnumerator InitiateDeath() { State = CarState.Dead; _rigidbody.isKinematic = true; SwitchVisibilityRpc(toVisible: false); RespawnInProjPosRpc(); if (IsOwner) { NetworkPlayer.Deaths++; UIManager.Instance.SetNotificationCanvas(true, "YOU DIED", "SECONDS UNTIL REAPPEARANCE"); } for (var i = 3; i > 0; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); _rigidbody.isKinematic = false; SwitchVisibilityRpc(); }
+    [Rpc(SendTo.Server)] private void RespawnInProjPosRpc() { transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); _serverPos = transform.position; }
 
-    private IEnumerator InitiateDeath()
-    {
-        State = CarState.Dead;
-        _rigidbody.isKinematic = true;
-        SwitchVisibilityRpc(toVisible: false);
-        RespawnInProjPosRpc();
-
-        if (IsOwner)
-        {
-            NetworkPlayer.Deaths++;
-            UIManager.Instance.SetNotificationCanvas(true, "YOU DIED", "SECONDS UNTIL REAPPEARANCE");
-        }
-
-        // Wait for 3 seconds before switching to visible
-        for (var i = 3; i > 0; i--)
-        {
-            if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}";
-            yield return new WaitForSeconds(1);
-        }
-
-        if (IsOwner) UIManager.Instance.SetNotificationCanvas(false);
-
-        _rigidbody.isKinematic = false;
-        SwitchVisibilityRpc();
-    }
-
-    [Rpc(SendTo.Server)]
-    private void RespawnInProjPosRpc()
-    {
-        transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos;
-        transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up);
-    }
-
+    private IEnumerator CheckIsOnTrack() { var cachedIsOnTrack = true; while (true) { yield return new WaitForSeconds(0.5f); _isOnTrack = IsOnTrack(); if (!_isOnTrack && !cachedIsOnTrack && IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(true, "YOU ARE OUT OF TRACK", "SECONDS UNTIL RESPAWN"); for (var i = 3; i > 0 && !IsOnTrack() && IsRacing; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); if (!IsOnTrack()) RespawnInProjPosRpc(); } } cachedIsOnTrack = _isOnTrack; } }
+    private bool IsOnTrack() { var isOnTrack = true; var cachedIsOnTrack = false; foreach (var axleInfo in axleInfos) { isOnTrack = cachedIsOnTrack || IsNotOffPiste(axleInfo.leftWheel) || IsNotOffPiste(axleInfo.rightWheel); cachedIsOnTrack = isOnTrack; } return isOnTrack; }
+    private bool IsNotOffPiste(WheelCollider wheel) { var hit = new WheelHit(); try { wheel.GetGroundHit(out hit); if (hit.collider.CompareTag("Off-piste")) return false; } catch (Exception) { return true; } return true; }
+    
+    private void TractionControl() { foreach (var axleInfo in axleInfos) { WheelHit wheelHitLeft; WheelHit wheelHitRight; axleInfo.leftWheel.GetGroundHit(out wheelHitLeft); axleInfo.rightWheel.GetGroundHit(out wheelHitRight); if (wheelHitLeft.forwardSlip >= _slipLimit) { var howMuchSlip = (wheelHitLeft.forwardSlip - _slipLimit) / (1 - _slipLimit); axleInfo.leftWheel.motorTorque -= axleInfo.leftWheel.motorTorque * howMuchSlip * _slipLimit; } if (wheelHitRight.forwardSlip >= _slipLimit) { var howMuchSlip = (wheelHitRight.forwardSlip - _slipLimit) / (1 - _slipLimit); axleInfo.rightWheel.motorTorque -= axleInfo.rightWheel.motorTorque * howMuchSlip * _slipLimit; } } }
+    private void AddDownForce() { foreach (var axleInfo in axleInfos) axleInfo.leftWheel.attachedRigidbody.AddForce(-transform.up * (_downForce * axleInfo.leftWheel.attachedRigidbody.velocity.magnitude)); }
+    private void SpeedLimiter() { var speed = _rigidbody.velocity.magnitude; if (speed > _topSpeed) _rigidbody.velocity = _topSpeed * _rigidbody.velocity.normalized; }
+    private void ApplyLocalPositionToVisuals(WheelCollider col) { if (col.transform.childCount == 0) return; var visualWheel = col.transform.GetChild(0); Vector3 position; Quaternion rotation; col.GetWorldPose(out position, out rotation); var myTransform = visualWheel.transform; myTransform.position = position; myTransform.rotation = rotation; }
+    private void SteerHelper() { foreach (var axleInfo in axleInfos) { var wheelHit = new WheelHit[2]; axleInfo.leftWheel.GetGroundHit(out wheelHit[0]); axleInfo.rightWheel.GetGroundHit(out wheelHit[1]); foreach (var wh in wheelHit) if (wh.normal == Vector3.zero) return; } if (Mathf.Abs(currentRotation - transform.eulerAngles.y) < 10f) { var turnAdjust = (transform.eulerAngles.y - currentRotation) * STEER_HELPER; var velRotation = Quaternion.AngleAxis(turnAdjust, Vector3.up); _rigidbody.velocity = velRotation * _rigidbody.velocity; } currentRotation = transform.eulerAngles.y; }
     #endregion
-
-    #region IsOnTrack
-
-    /// <summary>
-    /// Checks if the car is not out track.
-    /// </summary>
-    private IEnumerator CheckIsOnTrack()
-    {
-        var cachedIsOnTrack = true;
-
-        while (true)
-        {
-            yield return new WaitForSeconds(0.5f);
-
-            _isOnTrack = IsOnTrack();
-            if (!_isOnTrack && !cachedIsOnTrack && IsRacing)
-            {
-                if (IsOwner)
-                    UIManager.Instance.SetNotificationCanvas(true, "YOU ARE OUT OF TRACK", "SECONDS UNTIL RESPAWN");
-
-                for (var i = 3; i > 0 && !IsOnTrack() && IsRacing; i--)
-                {
-                    if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}";
-                    yield return new WaitForSeconds(1);
-                }
-
-                if (IsRacing)
-                {
-                    if (IsOwner) UIManager.Instance.SetNotificationCanvas(false);
-                    if (!IsOnTrack()) RespawnInProjPosRpc();
-                }
-            }
-
-            cachedIsOnTrack = _isOnTrack;
-        }
-    }
-
-    private bool IsOnTrack()
-    {
-        var isOnTrack = true;
-        var cachedIsOnTrack = false;
-
-        foreach (var axleInfo in axleInfos)
-        {
-            isOnTrack = cachedIsOnTrack || IsNotOffPiste(axleInfo.leftWheel) || IsNotOffPiste(axleInfo.rightWheel);
-            cachedIsOnTrack = isOnTrack;
-        }
-
-        return isOnTrack;
-    }
-
-    private bool IsNotOffPiste(WheelCollider wheel)
-    {
-        var hit = new WheelHit();
-
-        try
-        {
-            wheel.GetGroundHit(out hit);
-            if (hit.collider.CompareTag("Off-piste")) return false;
-        }
-        catch (Exception)
-        {
-            // car is not on the ground
-            return true;
-        }
-
-        return true;
-    }
-
-    #endregion
-
-    #region Movement
-
-    // Crude traction control that reduces the power to wheel if the car is wheel spinning too much
-    private void TractionControl()
-    {
-        foreach (var axleInfo in axleInfos)
-        {
-            WheelHit wheelHitLeft;
-            WheelHit wheelHitRight;
-            axleInfo.leftWheel.GetGroundHit(out wheelHitLeft);
-            axleInfo.rightWheel.GetGroundHit(out wheelHitRight);
-
-            if (wheelHitLeft.forwardSlip >= _slipLimit)
-            {
-                var howMuchSlip = (wheelHitLeft.forwardSlip - _slipLimit) / (1 - _slipLimit);
-                axleInfo.leftWheel.motorTorque -= axleInfo.leftWheel.motorTorque * howMuchSlip * _slipLimit;
-            }
-
-            if (wheelHitRight.forwardSlip >= _slipLimit)
-            {
-                var howMuchSlip = (wheelHitRight.forwardSlip - _slipLimit) / (1 - _slipLimit);
-                axleInfo.rightWheel.motorTorque -= axleInfo.rightWheel.motorTorque * howMuchSlip * _slipLimit;
-            }
-        }
-    }
-
-    // This is used to add more grip in relation to speed
-    private void AddDownForce()
-    {
-        foreach (var axleInfo in axleInfos)
-            axleInfo.leftWheel.attachedRigidbody.AddForce(
-                -transform.up * (_downForce * axleInfo.leftWheel.attachedRigidbody.velocity.magnitude));
-    }
-
-    private void SpeedLimiter()
-    {
-        var speed = _rigidbody.velocity.magnitude;
-        if (speed > _topSpeed)
-            _rigidbody.velocity = _topSpeed * _rigidbody.velocity.normalized;
-    }
-
-    // Finds the corresponding visual wheel and correctly applies the transform
-    private void ApplyLocalPositionToVisuals(WheelCollider col)
-    {
-        if (col.transform.childCount == 0) return;
-
-        var visualWheel = col.transform.GetChild(0);
-
-        Vector3 position;
-        Quaternion rotation;
-        col.GetWorldPose(out position, out rotation);
-        var myTransform = visualWheel.transform;
-        myTransform.position = position;
-        myTransform.rotation = rotation;
-    }
-
-    private void SteerHelper()
-    {
-        foreach (var axleInfo in axleInfos)
-        {
-            var wheelHit = new WheelHit[2];
-            axleInfo.leftWheel.GetGroundHit(out wheelHit[0]);
-            axleInfo.rightWheel.GetGroundHit(out wheelHit[1]);
-            foreach (var wh in wheelHit)
-                if (wh.normal == Vector3.zero)
-                    return;  // Wheels aren't on the ground so don't realign the rigidbody velocity
-        }
-
-        // This if is needed to avoid gimbal lock problems that will make the car suddenly shift direction
-        if (Mathf.Abs(currentRotation - transform.eulerAngles.y) < 10f)
-        {
-            var turnAdjust = (transform.eulerAngles.y - currentRotation) * STEER_HELPER;
-            var velRotation = Quaternion.AngleAxis(turnAdjust, Vector3.up);
-            _rigidbody.velocity = velRotation * _rigidbody.velocity;
-        }
-
-        currentRotation = transform.eulerAngles.y;
-    }
-
-    #endregion
-
 }

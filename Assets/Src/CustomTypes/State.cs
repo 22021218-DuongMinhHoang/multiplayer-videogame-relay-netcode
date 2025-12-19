@@ -39,4 +39,12 @@ namespace CustomTypes
         Classification3,
         Race3
     }
+
+    [Serializable]
+    public enum DeadReckoningMode
+    {
+        None,       // Bậc 0: Chỉ nội suy về vị trí mới nhất
+        Linear,     // Bậc 1: P + V*t
+        Quadratic   // Bậc 2: P + V*t + 0.5*A*t^2
+    }
 }
