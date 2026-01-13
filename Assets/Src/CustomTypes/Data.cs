@@ -9,28 +9,33 @@ namespace CustomTypes
     {
         [SerializeField] [HideInInspector] private float _x, _y, _z;
         [SerializeField] [HideInInspector] private float _xr, _yr, _zr;
-        [SerializeField] [HideInInspector] private float _timestamp; // Added Timestamp
+        [SerializeField] [HideInInspector] private float _vx, _vy, _vz; // Vận tốc
+        [SerializeField] [HideInInspector] private float _ax, _ay, _az; // GIA TỐC (MỚI)
+        [SerializeField] [HideInInspector] private float _timestamp;
 
         internal Vector3 Position
         {
             get => new(_x, _y, _z);
-            set
-            {
-                _x = value.x;
-                _y = value.y;
-                _z = value.z;
-            }
+            set { _x = value.x; _y = value.y; _z = value.z; }
         }
 
         internal Vector3 Rotation
         {
             get => new(_xr, _yr, _zr);
-            set
-            {
-                _xr = value.x;
-                _yr = value.y;
-                _zr = value.z;
-            }
+            set { _xr = value.x; _yr = value.y; _zr = value.z; }
+        }
+        
+        internal Vector3 Velocity
+        {
+            get => new(_vx, _vy, _vz);
+            set { _vx = value.x; _vy = value.y; _vz = value.z; }
+        }
+
+        // Thêm Property Acceleration
+        internal Vector3 Acceleration
+        {
+            get => new(_ax, _ay, _az);
+            set { _ax = value.x; _ay = value.y; _az = value.z; }
         }
 
         internal float Timestamp
@@ -49,7 +54,16 @@ namespace CustomTypes
             serializer.SerializeValue(ref _yr);
             serializer.SerializeValue(ref _zr);
             
-            serializer.SerializeValue(ref _timestamp); // Serialize Timestamp
+            serializer.SerializeValue(ref _vx);
+            serializer.SerializeValue(ref _vy);
+            serializer.SerializeValue(ref _vz);
+            
+            // Serialize Acceleration
+            serializer.SerializeValue(ref _ax); 
+            serializer.SerializeValue(ref _ay); 
+            serializer.SerializeValue(ref _az); 
+            
+            serializer.SerializeValue(ref _timestamp);
         }
     }
 

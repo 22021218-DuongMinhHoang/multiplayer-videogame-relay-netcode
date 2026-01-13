@@ -9,8 +9,6 @@ using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using Unity.Services.Authentication;
 using Unity.Services.Core;
-// using Unity.Services.Relay; // Không cần dùng Relay nữa
-// using Unity.Services.Relay.Models;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -23,7 +21,7 @@ public class UIManager : MonoBehaviour
     
     [Header("Menu")] [SerializeField] public GameObject menuCanvas;
     [SerializeField] public TMP_InputField menuNickname;
-    [SerializeField] public TMP_InputField menuRoomCode; // Sẽ dùng làm nơi nhập IP
+    [SerializeField] public TMP_InputField menuRoomCode; 
     [SerializeField] public Button menuJoin;
     [SerializeField] public Button menuHost;
 
@@ -66,6 +64,7 @@ public class UIManager : MonoBehaviour
     // --- DEAD RECKONING UI ---
     [Header("Dead Reckoning Settings")]
     [SerializeField] public TMP_Dropdown drAlgorithmDropdown;
+    [SerializeField] public TMP_Dropdown correctionModeDropdown;
     [SerializeField] public Toggle useCubicSplineToggle;
     [SerializeField] public Toggle useAdaptiveThresholdToggle;
     [SerializeField] public Toggle useTimeSyncToggle;
@@ -74,11 +73,12 @@ public class UIManager : MonoBehaviour
     [SerializeField] public TMP_Text instantError;
     [SerializeField] public TMP_Text jitterEstimate;
     
-    // --- NETWORK SIMULATOR UI ---
-    [Header("Network Simulation")]
+    // --- NETWORK SIMULATOR & BOT UI ---
+    [Header("Debug & Simulation")]
     [SerializeField] public Slider pingSlider;       
     [SerializeField] public TMP_Text pingDisplay;    
     [SerializeField] public Toggle enableSimToggle; 
+    [SerializeField] public Toggle botToggle; 
     // -----------------------------
 
     [Header("End Game")] [SerializeField] public GameObject endGameCanvas;
@@ -87,7 +87,9 @@ public class UIManager : MonoBehaviour
     [SerializeField] [HideInInspector] public ChatController chatController;
     [SerializeField] [HideInInspector] public DebugController debugController;
     
-    [SerializeField] [HideInInspector] private string _joinCode; // Không dùng cho LAN, nhưng giữ biến để debug hiển thị
+    [SerializeField] [HideInInspector] private string _joinCode; 
+
+    [SerializeField] public Button botResetButton;
 
     public AppScreen State { get; private set; } = AppScreen.Menu;
 
@@ -100,6 +102,16 @@ public class UIManager : MonoBehaviour
 
     #region Delegates and Events
     
+    private void Update()
+    {
+        if (State == AppScreen.Game || State == AppScreen.Room)
+        {
+            bool isHost = NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost;
+            if (pingSlider != null) pingSlider.interactable = isHost;
+            if (enableSimToggle != null) enableSimToggle.interactable = isHost;
+        }
+    }
+
     private IEnumerator OnConnection()
     {
         loadCanvas.SetActive(true);
@@ -108,7 +120,6 @@ public class UIManager : MonoBehaviour
         loadCanvas.SetActive(false);
         var mode = NetworkManager.Singleton.IsHost ? "Host" : NetworkManager.Singleton.IsServer ? "Server" : "Client";
         
-        // Hiển thị IP hoặc thông báo LAN
         string displayInfo = NetworkManager.Singleton.IsHost ? GetLocalIPAddress() : menuRoomCode.text;
         if(string.IsNullOrEmpty(displayInfo)) displayInfo = "Localhost";
         
@@ -117,17 +128,18 @@ public class UIManager : MonoBehaviour
         StartCoroutine(debugController.ShowClientRTT());
     }
 
-    // Hàm lấy IP mạng LAN để hiển thị cho Host biết
     private string GetLocalIPAddress()
     {
-        var host = Dns.GetHostEntry(Dns.GetHostName());
-        foreach (var ip in host.AddressList)
-        {
-            if (ip.AddressFamily == AddressFamily.InterNetwork)
+        try {
+            var host = Dns.GetHostEntry(Dns.GetHostName());
+            foreach (var ip in host.AddressList)
             {
-                return ip.ToString();
+                if (ip.AddressFamily == AddressFamily.InterNetwork)
+                {
+                    return ip.ToString();
+                }
             }
-        }
+        } catch { }
         return "127.0.0.1";
     }
 
@@ -183,19 +195,15 @@ public class UIManager : MonoBehaviour
     // --- LAN HOST ---
     private async void OnStartHost()
     {
-        // Vẫn khởi tạo UnityServices để lấy ID người chơi (nếu cần), nhưng không bắt buộc cho LAN thuần túy
         await UnityServices.InitializeAsync();
         if (!AuthenticationService.Instance.IsSignedIn) await AuthenticationService.Instance.SignInAnonymouslyAsync();
 
-        // 1. Cấu hình Transport cho LAN
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-        // "0.0.0.0" nghĩa là lắng nghe mọi kết nối đến máy này
         transport.SetConnectionData("0.0.0.0", 7777); 
 
         GameManager.Instance.PlayerName = string.IsNullOrEmpty(menuNickname.text) ? "Host" : menuNickname.text;
         menuNickname.text = "";
         
-        // 2. Start Host
         NetworkManager.Singleton.StartHost();
     }
 
@@ -205,22 +213,18 @@ public class UIManager : MonoBehaviour
         await UnityServices.InitializeAsync();
         if (!AuthenticationService.Instance.IsSignedIn) await AuthenticationService.Instance.SignInAnonymouslyAsync();
 
-        // 1. Lấy IP từ ô nhập RoomCode
-        string ipAddress = "127.0.0.1"; // Mặc định là localhost
+        string ipAddress = "127.0.0.1"; 
         if (!string.IsNullOrEmpty(menuRoomCode.text))
         {
             ipAddress = menuRoomCode.text;
         }
         
-        // 2. Cấu hình Transport để kết nối đến IP đó
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         transport.SetConnectionData(ipAddress, 7777);
 
         GameManager.Instance.PlayerName = string.IsNullOrEmpty(menuNickname.text) ? "Client" : menuNickname.text;
-        // menuRoomCode.text = ""; // Giữ lại IP để người dùng biết mình vừa nhập gì
         menuNickname.text = "";
 
-        // 3. Start Client
         try
         {
             NetworkManager.Singleton.StartClient();
@@ -263,8 +267,9 @@ public class UIManager : MonoBehaviour
         loadHide.onClick.AddListener(() => loadCanvas.SetActive(false));
 
         menuNickname.text = "";
-        menuRoomCode.text = ""; // Để trống lúc đầu
-        menuRoomCode.placeholder.GetComponent<TMP_Text>().text = "Enter Host IP (Default: 127.0.0.1)"; // Hướng dẫn người dùng
+        menuRoomCode.text = ""; 
+        if (menuRoomCode.placeholder != null)
+            menuRoomCode.placeholder.GetComponent<TMP_Text>().text = "Enter Host IP (Default: 127.0.0.1)"; 
 
         menuJoin.onClick.AddListener(OnStartClient);
         menuJoin.onClick.AddListener(() => StartCoroutine(OnConnection()));
@@ -293,8 +298,15 @@ public class UIManager : MonoBehaviour
             drAlgorithmDropdown.AddOptions(new List<string> { "None (Lerp)", "Linear (1st Order)", "Quadratic (2nd Order)" });
             drAlgorithmDropdown.onValueChanged.AddListener(OnDRAlgorithmChanged);
         }
+
+        if (correctionModeDropdown != null)
+        {
+            correctionModeDropdown.ClearOptions();
+            correctionModeDropdown.AddOptions(new List<string> { "SmoothDamp", "Lerp" });
+            correctionModeDropdown.onValueChanged.AddListener(OnCorrectionModeChanged);
+        }
         
-        if (gameInterpolation != null) // Toggle Bật/Tắt DR
+        if (gameInterpolation != null) 
         {
             gameInterpolation.onValueChanged.RemoveAllListeners();
             gameInterpolation.onValueChanged.AddListener(OnDeadReckoningToggleChanged);
@@ -312,11 +324,42 @@ public class UIManager : MonoBehaviour
             pingSlider.value = 0;
             pingSlider.onValueChanged.AddListener(OnPingSliderChanged);
         }
-        if (enableSimToggle != null) enableSimToggle.onValueChanged.AddListener(OnSimToggleChanged);
+        if (enableSimToggle != null) 
+        {
+            enableSimToggle.isOn = false;
+            enableSimToggle.onValueChanged.AddListener(OnSimToggleChanged);
+        }
+        
+        // Force reset simulator at start
+        var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
+        if (transport != null) transport.SetDebugSimulatorParameters(0, 0, 0);
+
+        // --- BOT TOGGLE ---
+        if (botToggle != null) botToggle.isOn = false;
+
+        if (botResetButton != null)
+        {
+            botResetButton.onClick.AddListener(OnBotResetClicked);
+        }
     }
     
-    // --- EVENT HANDLERS ---
+    // --- EVENT HANDLERS (WITH RESET METRICS) ---
     
+    private void ResetLocalMetrics()
+    {
+        if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null) return;
+        var localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
+        if (localPlayer != null)
+        {
+            var playerScript = localPlayer.GetComponent<NetworkPlayer>();
+            if (playerScript != null && playerScript.car != null)
+            {
+                var controller = playerScript.car.GetComponent<CarController>();
+                if (controller != null) controller.ResetCalculationMetrics();
+            }
+        }
+    }
+
     private void OnDeadReckoningToggleChanged(bool value)
     {
         var playerCar = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject()?.GetComponent<NetworkPlayer>()?.car;
@@ -325,6 +368,7 @@ public class UIManager : MonoBehaviour
             var controller = playerCar.GetComponent<CarController>();
             if (controller != null) controller.UseDeadReckoning = value;
         }
+        ResetLocalMetrics();
     }
 
     private void OnDRAlgorithmChanged(int index)
@@ -335,6 +379,18 @@ public class UIManager : MonoBehaviour
             var controller = playerCar.GetComponent<CarController>();
             if (controller != null) controller.SetDRMode((DeadReckoningMode)index);
         }
+        ResetLocalMetrics();
+    }
+
+    private void OnCorrectionModeChanged(int index)
+    {
+        var playerCar = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject()?.GetComponent<NetworkPlayer>()?.car;
+        if (playerCar != null)
+        {
+            var controller = playerCar.GetComponent<CarController>();
+            if (controller != null) controller.SetCorrectionMode(index);
+        }
+        ResetLocalMetrics();
     }
 
     private void SetImprovementOption(string option, bool value)
@@ -345,6 +401,7 @@ public class UIManager : MonoBehaviour
             var controller = playerCar.GetComponent<CarController>();
             if (controller != null) controller.SetImprovement(option, value);
         }
+        ResetLocalMetrics();
     }
     
     // --- SIMULATOR LOGIC ---
@@ -368,7 +425,6 @@ public class UIManager : MonoBehaviour
         if (enableSimToggle != null && !enableSimToggle.isOn) return;
         var transport = NetworkManager.Singleton.NetworkConfig.NetworkTransport as UnityTransport;
         if (transport != null) {
-            // Delay in Simulator is One-Way. RTT = Delay * 2.
             int jitter = (int)(delay * 0.1f); 
             transport.SetDebugSimulatorParameters(packetDelay: (int)delay, packetJitter: jitter, dropRate: 0);
             if(pingDisplay) pingDisplay.text = $"Sim Latency: {(int)delay}ms (RTT: {(int)delay * 2}ms)";
@@ -378,7 +434,6 @@ public class UIManager : MonoBehaviour
     #endregion
     
     #region UI properties setters
-    // ... (Giữ nguyên phần SetNotificationCanvas, SetPlayerHub, ClearPlayerHub, StartGame, FailedStartGame)
     public void SetNotificationCanvas(bool active, string header = "", string body = "", string seconds = "")
     {
         notificationHeader.text = header;
@@ -412,5 +467,27 @@ public class UIManager : MonoBehaviour
         yield return new WaitForSeconds(3);
         SetNotificationCanvas(false);
     }
+
+    private void OnBotResetClicked()
+    {
+        // Tìm xe của Local Player
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SpawnManager != null)
+        {
+            var localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
+            if (localPlayer != null)
+            {
+                var playerScript = localPlayer.GetComponent<NetworkPlayer>();
+                if (playerScript != null && playerScript.car != null)
+                {
+                    var controller = playerScript.car.GetComponent<CarController>();
+                    if (controller != null)
+                    {
+                        controller.TeleportToStart();
+                    }
+                }
+            }
+        }
+    }
+
     #endregion
 }

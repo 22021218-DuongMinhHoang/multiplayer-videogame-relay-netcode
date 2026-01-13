@@ -11,6 +11,8 @@ public class GameManager : MonoBehaviour
 {
     #region Enablers, Collisions or Triggers
 
+    
+
     private void OnEnable()
     {
         Application.targetFrameRate = 60;
@@ -276,5 +278,22 @@ public class GameManager : MonoBehaviour
         return ROOM_POS + new Vector3(id * OFFSET_MULTIPLIER, 0, 0);
     }
     
+    [Header("Bot Settings")]
+    // Kéo GameObject cha chứa các điểm Waypoints vào đây trong Inspector
+    [SerializeField] public Transform waypointContainer; 
+
+    // Helper function để lấy list điểm nhanh (Optional)
+    public List<Transform> GetLevelWaypoints()
+    {
+        List<Transform> points = new List<Transform>();
+        if (waypointContainer != null)
+        {
+            foreach (Transform child in waypointContainer) points.Add(child);
+        }
+        return points;
+    }
+
     #endregion
+
+    
 }
