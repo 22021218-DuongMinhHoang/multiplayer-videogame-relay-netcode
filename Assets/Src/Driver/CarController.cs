@@ -296,6 +296,7 @@ public class CarController : NetworkBehaviour
 
     // --- LOGIC ---
     private void OnNetworkDataChanged(PosAndRotNetworkData oldVal, PosAndRotNetworkData newVal) {
+        if (IsOwner) return;
         if (newVal.Position == Vector3.zero) return;
         float now = Time.time;
         float packetTime = _useTimeSync ? newVal.Timestamp : now;
@@ -449,31 +450,25 @@ public class CarController : NetworkBehaviour
             SubmitBotInputServerRpc(inputSteering, inputAcceleration, inputBrake);
         }
 
-        if (IsServer) {
+        if (IsOwner || IsServer) {
             if (!_rigidbody.isKinematic) {
-                inputSteering = Mathf.Clamp(inputSteering, -1, 1); inputAcceleration = Mathf.Clamp(inputAcceleration, -1, 1); inputBrake = Mathf.Clamp(inputBrake, 0, 1);
-                var steering = _maxSteeringAngle * inputSteering;
-                foreach (var axleInfo in axleInfos) {
-                    if (axleInfo.steering) { axleInfo.leftWheel.steerAngle = steering; axleInfo.rightWheel.steerAngle = steering; }
-                    if (axleInfo.motor) {
-                        if (inputAcceleration > float.Epsilon) { _forwardMotorTorqueRB = RubberBand ? _forwardMotorTorque * NetworkPlayer.RubberBandCoefficient : _forwardMotorTorque; axleInfo.leftWheel.motorTorque = _forwardMotorTorqueRB; axleInfo.leftWheel.brakeTorque = 0f; axleInfo.rightWheel.motorTorque = _forwardMotorTorqueRB; axleInfo.rightWheel.brakeTorque = 0f; }
-                        if (inputAcceleration < -float.Epsilon) { _backwardMotorTorqueRB = RubberBand ? -_backwardMotorTorque * NetworkPlayer.RubberBandCoefficient : -_backwardMotorTorque; axleInfo.leftWheel.motorTorque = _backwardMotorTorqueRB; axleInfo.leftWheel.brakeTorque = 0f; axleInfo.rightWheel.motorTorque = _backwardMotorTorqueRB; axleInfo.rightWheel.brakeTorque = 0f; }
-                        if (Math.Abs(inputAcceleration) < float.Epsilon) { axleInfo.leftWheel.motorTorque = 0f; axleInfo.leftWheel.brakeTorque = _engineBrake; axleInfo.rightWheel.motorTorque = 0f; axleInfo.rightWheel.brakeTorque = _engineBrake; }
-                        if (inputBrake > 0f) { axleInfo.leftWheel.brakeTorque = _footBrake; axleInfo.rightWheel.brakeTorque = _footBrake; }
-                    }
-                    ApplyLocalPositionToVisuals(axleInfo.leftWheel); ApplyLocalPositionToVisuals(axleInfo.rightWheel);
+                UpdateLocalPos();
+                if (IsServer)
+                {    
+                    _networkData.Value = new PosAndRotNetworkData() { 
+                        Position = transform.position, 
+                        Rotation = transform.rotation.eulerAngles, 
+                        Velocity = _rigidbody.velocity, 
+                        Acceleration = (Time.fixedDeltaTime > 0) ? (_rigidbody.velocity - _serverVel) / Time.fixedDeltaTime : Vector3.zero,
+                        Timestamp = Time.time 
+                    };
                 }
-                SteerHelper(); SpeedLimiter(); AddDownForce(); TractionControl();
                 
-                _networkData.Value = new PosAndRotNetworkData() { 
-                    Position = transform.position, 
-                    Rotation = transform.rotation.eulerAngles, 
-                    Velocity = _rigidbody.velocity, 
-                    Acceleration = (Time.fixedDeltaTime > 0) ? (_rigidbody.velocity - _serverVel) / Time.fixedDeltaTime : Vector3.zero,
-                    Timestamp = Time.time 
-                };
             } else { 
-                _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero }; 
+                if (IsServer)
+                {
+                    _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero }; 
+                }
             }
         }
         // --- CLIENT ---
@@ -524,6 +519,24 @@ public class CarController : NetworkBehaviour
     }
     
     public void Update() { if (IsServer && IsSpawned) { var iSpeed = Mathf.FloorToInt(_rigidbody.velocity.magnitude); if (iSpeed != Speed) Speed = iSpeed; } }
+
+    void UpdateLocalPos() 
+    {
+        inputSteering = Mathf.Clamp(inputSteering, -1, 1); inputAcceleration = Mathf.Clamp(inputAcceleration, -1, 1); inputBrake = Mathf.Clamp(inputBrake, 0, 1);
+        var steering = _maxSteeringAngle * inputSteering;
+        foreach (var axleInfo in axleInfos) {
+            if (axleInfo.steering) { axleInfo.leftWheel.steerAngle = steering; axleInfo.rightWheel.steerAngle = steering; }
+            if (axleInfo.motor) {
+                if (inputAcceleration > float.Epsilon) { _forwardMotorTorqueRB = RubberBand ? _forwardMotorTorque * NetworkPlayer.RubberBandCoefficient : _forwardMotorTorque; axleInfo.leftWheel.motorTorque = _forwardMotorTorqueRB; axleInfo.leftWheel.brakeTorque = 0f; axleInfo.rightWheel.motorTorque = _forwardMotorTorqueRB; axleInfo.rightWheel.brakeTorque = 0f; }
+                if (inputAcceleration < -float.Epsilon) { _backwardMotorTorqueRB = RubberBand ? -_backwardMotorTorque * NetworkPlayer.RubberBandCoefficient : -_backwardMotorTorque; axleInfo.leftWheel.motorTorque = _backwardMotorTorqueRB; axleInfo.leftWheel.brakeTorque = 0f; axleInfo.rightWheel.motorTorque = _backwardMotorTorqueRB; axleInfo.rightWheel.brakeTorque = 0f; }
+                if (Math.Abs(inputAcceleration) < float.Epsilon) { axleInfo.leftWheel.motorTorque = 0f; axleInfo.leftWheel.brakeTorque = _engineBrake; axleInfo.rightWheel.motorTorque = 0f; axleInfo.rightWheel.brakeTorque = _engineBrake; }
+                if (inputBrake > 0f) { axleInfo.leftWheel.brakeTorque = _footBrake; axleInfo.rightWheel.brakeTorque = _footBrake; }
+            }
+            ApplyLocalPositionToVisuals(axleInfo.leftWheel); ApplyLocalPositionToVisuals(axleInfo.rightWheel);
+        }
+        SteerHelper(); SpeedLimiter(); AddDownForce(); TractionControl();
+        
+    }
 
     private void CalculateJerk() {
         float dt = Time.fixedDeltaTime; if (dt <= 0) return;

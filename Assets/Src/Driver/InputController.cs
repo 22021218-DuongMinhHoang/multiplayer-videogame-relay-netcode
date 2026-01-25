@@ -9,50 +9,77 @@ public class InputController : NetworkBehaviour
 {
     [SerializeField] [HideInInspector] private CarController _carController;
     
-    private void OnCarSpawn(int id)
-    {
-        var player = GetComponent<NetworkPlayer>();
-        if (id == player.ID)
-        {
-            _carController = player.car.GetComponent<CarController>();
-            EventManager.Instance.CarSpawn.RemoveListener(OnCarSpawn);
-        }
-    }
+    private NetworkPlayer _networkPlayer;
 
     public override void OnNetworkSpawn()
     {
+        _networkPlayer = GetComponent<NetworkPlayer>();
         EventManager.Instance.CarSpawn.AddListener(OnCarSpawn);
     }
-    
+
+    private void OnCarSpawn(int id)
+    {
+        if (_networkPlayer != null && id == _networkPlayer.ID)
+        {
+            if (_networkPlayer.car != null)
+            {
+                _carController = _networkPlayer.car.GetComponent<CarController>();
+            }
+            EventManager.Instance.CarSpawn.RemoveListener(OnCarSpawn);
+        }
+    }
     public void OnMove(InputAction.CallbackContext context)
     {
-        OnMoveRpc(context.ReadValue<Vector2>());
+        if (!IsOwner || _carController == null) return;
+
+        Vector2 input = context.ReadValue<Vector2>();
+
+        _carController.inputAcceleration = input.y;
+        _carController.inputSteering = input.x;
+
+        OnMoveRpc(input);
     }
 
     [Rpc(SendTo.Server)]
     private void OnMoveRpc(Vector2 input)
     {
-        _carController.inputAcceleration = input.y;
-        _carController.inputSteering = input.x;
+        if (_carController != null)
+        {
+            _carController.inputAcceleration = input.y;
+            _carController.inputSteering = input.x;
+        }
     }
 
     public void OnBrake(InputAction.CallbackContext context)
     {
-        OnBrakeRpc(context.ReadValue<float>());
+        if (!IsOwner || _carController == null) return;
+
+        float input = context.ReadValue<float>();
+
+        _carController.inputBrake = input;
+
+        OnBrakeRpc(input);
     }
 
     [Rpc(SendTo.Server)]
     public void OnBrakeRpc(float input)
     {
-        _carController.inputBrake = input;
+        if (_carController != null)
+        {
+            _carController.inputBrake = input;
+        }
     }
 
     public void OnAttack(InputAction.CallbackContext context)
     {
-        if (context.performed && GetComponent<NetworkPlayer>().Rockets > 0 && _carController.State != CarState.Idle &&
+        if (!IsOwner || _carController == null) return;
+
+        if (context.performed && _networkPlayer.Rockets > 0 && 
+            _carController.State != CarState.Idle && 
             _carController.State != CarState.Dead)
         {
-            GetComponent<NetworkPlayer>().Rockets--;
+             _networkPlayer.Rockets--; 
+
             OnAttackRpc();
         }
     }
@@ -60,11 +87,10 @@ public class InputController : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void OnAttackRpc()
     {
-        // Spawn rocket above the car and aiming the car forward
         var spawnPos = _carController.transform.position + new Vector3(0, 2);
         var spawnRot = _carController.transform.rotation;
 
-        GameManager.Instance.SpawnRocket(spawnPos, spawnRot, GetComponent<NetworkPlayer>().Name);
+        GameManager.Instance.SpawnRocket(spawnPos, spawnRot, _networkPlayer.Name);
     }
 
     public void OnSummary(InputAction.CallbackContext context)

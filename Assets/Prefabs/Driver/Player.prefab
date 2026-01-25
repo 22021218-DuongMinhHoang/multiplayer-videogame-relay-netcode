@@ -47,10 +47,10 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: d5a57f767e5e46a458fc5d3c628d0cbb, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  GlobalObjectIdHash: 27561029
+  GlobalObjectIdHash: 3448512454
   InScenePlacedSourceGlobalObjectIdHash: 0
   AlwaysReplicateAsRoot: 0
-  SynchronizeTransform: 1
+  SynchronizeTransform: 0
   ActiveSceneSynchronization: 0
   SceneMigrationSynchronization: 1
   SpawnWithObservers: 1
@@ -77,7 +77,8 @@ MonoBehaviour:
   checkpointAchieved: 0
   cameraSpawnPos: {x: 0, y: 3, z: -5}
   cameraSpawnRot: {x: 14.45, y: 0, z: 0}
-  startPos: {x: 10.5, y: 0, z: -80}
+  _chatMessage: {fileID: 0}
+  _rubberBandCoefficient: 1
 --- !u!114 &5559452113703404123
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -236,22 +237,6 @@ MonoBehaviour:
         m_CallState: 2
     m_ActionId: 02a0baa8-f6ca-486d-b2ef-aece5f42fec3
     m_ActionName: Player/Write[/Keyboard/shift]
-  - m_PersistentCalls:
-      m_Calls:
-      - m_Target: {fileID: 5559452113703404123}
-        m_TargetAssemblyTypeName: InputController, Assembly-CSharp
-        m_MethodName: OnSubmit
-        m_Mode: 0
-        m_Arguments:
-          m_ObjectArgument: {fileID: 0}
-          m_ObjectArgumentAssemblyTypeName: UnityEngine.Object, UnityEngine
-          m_IntArgument: 0
-          m_FloatArgument: 0
-          m_StringArgument: 
-          m_BoolArgument: 0
-        m_CallState: 2
-    m_ActionId: ef240b31-8746-437b-86c1-801558cb77f0
-    m_ActionName: Player/Submit[/Keyboard/enter]
   m_NeverAutoSwitchControlSchemes: 1
   m_DefaultControlScheme: Keyboard&Mouse
   m_DefaultActionMap: Player
