@@ -159,11 +159,22 @@ public class CarController : NetworkBehaviour
             if (IsServer && IsRace) GameManager.Instance.SpawnItemBox(APP_CONFIG.GAME.ITEM_BOXES_PER_RACE);
             else if (IsServer && IsClassif) GameManager.Instance.DespawnItemBox();
 
-            if (IsClassif || NetworkPlayer.CurrentRace.Equals(RaceState.Schedule)) {
-                UIManager.Instance.gameTitle.text = "Classification"; RocketPanel.SetActive(false); SwitchToInvisibleExceptMeRpc(); MoveToPositionRpc(GameManager.Instance.CLASSIF_POS);
-            } else {
-                UIManager.Instance.gameTitle.text = "Race"; RocketPanel.SetActive(true); SwitchVisibilityRpc(); MoveToPositionRpc(GameManager.Instance.RACE_POS[NetworkPlayer.StartPos]);
+            if (IsClassif || NetworkPlayer.CurrentRace.Equals(RaceState.Schedule)) 
+            {
+                UIManager.Instance.gameTitle.text = "Classification"; 
+                RocketPanel.SetActive(false); 
+                //SwitchToInvisibleExceptMeRpc(); 
+                //MoveToPositionRpc(GameManager.Instance.CLASSIF_POS);
+            } 
+            else 
+            {
+                UIManager.Instance.gameTitle.text = "Race"; 
+                RocketPanel.SetActive(true); 
+                //SwitchVisibilityRpc(); 
+                //MoveToPositionRpc(GameManager.Instance.RACE_POS[NetworkPlayer.StartPos]);
             }
+            MoveToPositionRpc(GameManager.Instance.RACE_POS[NetworkPlayer.StartPos]);
+            SwitchVisibilityRpc();
             ResetStatsRpc();
             NetworkPlayer.Location = "/game"; NetworkPlayer.FinishRawTime = 0f; NetworkPlayer.Rockets = 0; NetworkPlayer.HasFinished = false;
             UIManager.Instance.SetNotificationCanvas(true, "WAITING FOR PLAYERS"); UIManager.Instance.gameLaps.text = ""; UIManager.Instance.matchSummaryController.HasFinished = false;
@@ -259,6 +270,8 @@ public class CarController : NetworkBehaviour
              _networkData.OnValueChanged += OnNetworkDataChanged;
              ResetSplineState(transform.position); 
         }
+
+        NetworkPlayer.StartPos = NetworkPlayer.ID;
     }
     
     private void OnBotToggleChanged(bool isOn)
