@@ -45,7 +45,9 @@ public class CarController : NetworkBehaviour
     [SerializeField] public List<MeshRenderer> carMeshes;
 
     private readonly NetworkVariable<int> _networkSpeed = new();
-    private readonly NetworkVariable<PosAndRotNetworkData> _networkData = new();
+    private readonly NetworkVariable<PosAndRotNetworkData> _networkData = new(
+        writePerm: NetworkVariableWritePermission.Owner
+    );
     private List<Material[]> _originalMaterials;
 
     [SerializeField] [HideInInspector] private int _laps;
@@ -84,7 +86,7 @@ public class CarController : NetworkBehaviour
     private float waypointThreshold = 5.0f;
 
     // --- DEAD RECKONING VARIABLES ---
-    public bool UseDeadReckoning { get; set; } = true;
+    public bool UseDeadReckoning = false;
 
     // --- NEW ENUM FOR CORRECTION MODE ---
     public enum CorrectionMode { SmoothDamp, Lerp }
@@ -95,9 +97,9 @@ public class CarController : NetworkBehaviour
     [SerializeField] private float snapThreshold = 10f; 
     
     // Improvement Flags
-    private bool _useCubicSpline = false;
-    private bool _useAdaptiveThreshold = false;
-    private bool _useTimeSync = false;
+    public bool _useCubicSpline = false;
+    public bool _useAdaptiveThreshold = false;
+    public bool _useTimeSync = false;
 
     // Runtime DR State
     private Vector3 _serverPos;
@@ -463,25 +465,22 @@ public class CarController : NetworkBehaviour
             SubmitBotInputServerRpc(inputSteering, inputAcceleration, inputBrake);
         }
 
-        if (IsOwner || IsServer) {
-            if (!_rigidbody.isKinematic) {
+        //if (IsOwner || IsServer)
+        if (IsOwner) {
+            if (!_rigidbody.isKinematic) 
+            {
                 UpdateLocalPos();
-                if (IsServer)
-                {    
-                    _networkData.Value = new PosAndRotNetworkData() { 
-                        Position = transform.position, 
-                        Rotation = transform.rotation.eulerAngles, 
-                        Velocity = _rigidbody.velocity, 
-                        Acceleration = (Time.fixedDeltaTime > 0) ? (_rigidbody.velocity - _serverVel) / Time.fixedDeltaTime : Vector3.zero,
-                        Timestamp = Time.time 
-                    };
-                }
-                
-            } else { 
-                if (IsServer)
-                {
-                    _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero }; 
-                }
+                _networkData.Value = new PosAndRotNetworkData() { 
+                    Position = transform.position, 
+                    Rotation = transform.rotation.eulerAngles, 
+                    Velocity = _rigidbody.velocity, 
+                    Acceleration = (Time.fixedDeltaTime > 0) ? (_rigidbody.velocity - _serverVel) / Time.fixedDeltaTime : Vector3.zero,
+                    Timestamp = Time.time 
+                };
+            } 
+            else 
+            { 
+                _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero }; 
             }
         }
         // --- CLIENT ---
