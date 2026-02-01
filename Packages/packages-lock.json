@@ -7,13 +7,6 @@
       "dependencies": {},
       "hash": "0bac2f62fcb0acd970bcfc04515fdc1519b6d54f"
     },
-    "com.hwaet.projectcloner": {
-      "version": "https://github.com/hwaet/UnityProjectCloner.git",
-      "depth": 0,
-      "source": "git",
-      "dependencies": {},
-      "hash": "f8c8347af3a144069dffd6120f1c4142f8120891"
-    },
     "com.unity.burst": {
       "version": "1.8.4",
       "depth": 2,
@@ -337,6 +330,13 @@
         "com.unity.modules.jsonserialize": "1.0.0"
       },
       "url": "https://packages.unity.com"
+    },
+    "com.veriorpies.parrelsync": {
+      "version": "https://github.com/VeriorPies/ParrelSync.git?path=/ParrelSync",
+      "depth": 0,
+      "source": "git",
+      "dependencies": {},
+      "hash": "610157ad762084380380148ba8ce14e266a6da97"
     },
     "com.unity.modules.ai": {
       "version": "1.0.0",
