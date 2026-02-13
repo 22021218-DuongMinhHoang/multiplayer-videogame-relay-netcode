@@ -46,7 +46,7 @@ public class CarController : NetworkBehaviour
 
     private readonly NetworkVariable<int> _networkSpeed = new();
     private readonly NetworkVariable<PosAndRotNetworkData> _networkData = new(
-        writePerm: NetworkVariableWritePermission.Owner
+        writePerm: NetworkVariableWritePermission.Server
     );
     private List<Material[]> _originalMaterials;
 
@@ -242,7 +242,7 @@ public class CarController : NetworkBehaviour
             if (UIManager.Instance != null && UIManager.Instance.botToggle != null)
                 UIManager.Instance.botToggle.onValueChanged.RemoveListener(OnBotToggleChanged);
         }
-        if (!IsServer) _networkData.OnValueChanged -= OnNetworkDataChanged;
+        _networkData.OnValueChanged -= OnNetworkDataChanged;
     }
     public override void OnNetworkSpawn() {
         State = CarState.Idle; _rigidbody = GetComponent<Rigidbody>(); _rigidbody.isKinematic = true;
@@ -268,12 +268,13 @@ public class CarController : NetworkBehaviour
                 SetPlayerTag(-1, NetworkPlayer.Name); OnRocketChange(NetworkPlayer.Rockets); SetMainMeshMaterialColor(NetworkPlayer.CarColor); EventManager.Instance.RaisePlayersCarFound(ID);
             }
         if (NetworkPlayer == null) throw new Exception("Player not found!");
-        if (!IsServer) {
-             _networkData.OnValueChanged += OnNetworkDataChanged;
-             ResetSplineState(transform.position); 
-        }
-
-        NetworkPlayer.StartPos = NetworkPlayer.ID;
+        
+    
+        _networkData.OnValueChanged += OnNetworkDataChanged;
+        ResetSplineState(transform.position); 
+        
+        
+        if (IsOwner) NetworkPlayer.StartPos = NetworkPlayer.ID;
     }
     
     private void OnBotToggleChanged(bool isOn)
@@ -466,10 +467,20 @@ public class CarController : NetworkBehaviour
         }
 
         //if (IsOwner || IsServer)
-        if (IsOwner) {
+        // if (IsOwner) {
+        //     if (!_rigidbody.isKinematic) 
+        //     {
+        //         UpdateLocalPos();
+        //     }
+        // }
+        if (!_rigidbody.isKinematic) 
+        {
+            UpdateLocalPos();
+        }
+        if (IsServer)
+        {
             if (!_rigidbody.isKinematic) 
             {
-                UpdateLocalPos();
                 _networkData.Value = new PosAndRotNetworkData() { 
                     Position = transform.position, 
                     Rotation = transform.rotation.eulerAngles, 
@@ -484,7 +495,7 @@ public class CarController : NetworkBehaviour
             }
         }
         // --- CLIENT ---
-        else if (IsClient && !_rigidbody.isKinematic && _networkData.Value.Position != Vector3.zero) {
+        else if (IsClient && !IsOwner && !_rigidbody.isKinematic && _networkData.Value.Position != Vector3.zero) {
             
             if (!UseDeadReckoning)
             {
