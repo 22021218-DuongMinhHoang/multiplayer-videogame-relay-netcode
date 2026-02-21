@@ -41,7 +41,9 @@ public class InputController : NetworkBehaviour
 
     public void OnBrake(InputAction.CallbackContext context)
     {
-        OnBrakeRpc(context.ReadValue<float>());
+        float input = context.ReadValue<float>();
+        _carController.inputBrake = input;
+        OnBrakeRpc(input);
     }
 
     [Rpc(SendTo.Server)]

@@ -9,9 +9,12 @@ namespace CustomTypes
     {
         [SerializeField] [HideInInspector] private float _x, _y, _z;
         [SerializeField] [HideInInspector] private float _xr, _yr, _zr;
-        [SerializeField] [HideInInspector] private float _vx, _vy, _vz; // Vận tốc
-        [SerializeField] [HideInInspector] private float _ax, _ay, _az; // GIA TỐC (MỚI)
+        [SerializeField] [HideInInspector] private float _vx, _vy, _vz;
+        [SerializeField] [HideInInspector] private float _ax, _ay, _az;
         [SerializeField] [HideInInspector] private float _timestamp;
+        [SerializeField] [HideInInspector] private int tick;
+
+        [SerializeField] [HideInInspector] private float speed;
 
         internal Vector3 Position
         {
@@ -44,6 +47,18 @@ namespace CustomTypes
             set => _timestamp = value;
         }
 
+        internal int Tick
+        {
+            get => tick;
+            set => tick = value;
+        }
+
+        internal float Speed
+        {
+            get => speed;
+            set => speed = value;
+        }
+
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref _x);
@@ -64,6 +79,10 @@ namespace CustomTypes
             serializer.SerializeValue(ref _az); 
             
             serializer.SerializeValue(ref _timestamp);
+
+            serializer.SerializeValue(ref tick);
+
+            serializer.SerializeValue(ref speed);
         }
     }
 
