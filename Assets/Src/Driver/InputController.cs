@@ -29,7 +29,7 @@ public class InputController : NetworkBehaviour
         Vector2 input = context.ReadValue<Vector2>();
         _carController.inputAcceleration = input.y;
         _carController.inputSteering = input.x;
-        OnMoveRpc(input);
+        //OnMoveRpc(input);
     }
 
     [Rpc(SendTo.Server)]
@@ -43,7 +43,7 @@ public class InputController : NetworkBehaviour
     {
         float input = context.ReadValue<float>();
         _carController.inputBrake = input;
-        OnBrakeRpc(input);
+        //OnBrakeRpc(input);
     }
 
     [Rpc(SendTo.Server)]

@@ -6,20 +6,36 @@ using TMPro;
 using Unity.Netcode;
 using UnityEngine;
 
-public struct InputPayload
+public struct InputPayload : INetworkSerializable
 {
     public int tick;
     public float inputAcceleration;
     public float inputSteering;
     public float inputBrake;
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref tick);
+        serializer.SerializeValue(ref inputAcceleration);
+        serializer.SerializeValue(ref inputSteering);
+        serializer.SerializeValue(ref inputBrake);
+    }
 }
 
-public struct StatePayload
+public struct StatePayload : INetworkSerializable
 {
     public int tick;
     public Vector3 position;
     public Vector3 rotation;
     public float speed;
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref tick);
+        serializer.SerializeValue(ref position);
+        serializer.SerializeValue(ref rotation);
+        serializer.SerializeValue(ref speed);
+    }
 }
 
 [Serializable]
@@ -108,6 +124,7 @@ public class CarController : NetworkBehaviour
     
     [Header("Client Side Prediction and Server Reconcilation")]
     private int currentTick;
+    private int serverProcessTick;
     private float minTimeBetweenTicks;
     private const float SERVER_TICK_RATE = 30f;
     private const int BUFFER_SIZE = 1024;
@@ -116,6 +133,8 @@ public class CarController : NetworkBehaviour
     private InputPayload[] inputBuffer;
     private StatePayload latestServerState;
     private StatePayload lastProcessedState;
+    private SortedDictionary<int, InputPayload> pendingInputs = new SortedDictionary<int, InputPayload>();
+    private int lastProcessedTick;
 
     public bool _useCubicSpline = false;
     public bool _useAdaptiveThreshold = false;
@@ -437,8 +456,24 @@ public class CarController : NetworkBehaviour
             if (!IsServer && IsOwner) 
             {
                 UpdateTick();
+                currentTick++;
             }
-            else UpdateLocalPos();
+            else 
+            {
+                int nextTick = lastProcessedTick + 1;
+
+                if (pendingInputs.TryGetValue(nextTick, out var input))
+                {
+                    ProcessMovement(input);
+
+                    lastProcessedTick = nextTick;
+                    pendingInputs.Remove(nextTick);
+                }
+
+                //UpdateLocalPos();
+            }
+
+            
         }
         
         if (IsServer)
@@ -451,7 +486,7 @@ public class CarController : NetworkBehaviour
                     Velocity = _rigidbody.velocity, 
                     Acceleration = (Time.fixedDeltaTime > 0) ? (_rigidbody.velocity - _serverVel) / Time.fixedDeltaTime : Vector3.zero,
                     Timestamp = Time.time,
-                    Tick = currentTick,
+                    Tick = lastProcessedTick,
                     Speed = currentSpeed
                 };
             } 
@@ -488,6 +523,7 @@ public class CarController : NetworkBehaviour
                 if (currentCorrectionMode == CorrectionMode.SmoothDamp)
                 {
                     Vector3 smoothPos = Vector3.SmoothDamp(transform.position, _targetPos, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME, float.PositiveInfinity, Time.fixedDeltaTime);
+                    _rigidbody.velocity = _vel;
                     _rigidbody.MovePosition(smoothPos);
                 }
                 else
@@ -538,7 +574,8 @@ public class CarController : NetworkBehaviour
             transform.Rotate(0, turnAmount, 0);
         }
 
-        _rigidbody.velocity = transform.forward * currentSpeed;
+        //_rigidbody.velocity = transform.forward * currentSpeed;
+        transform.position += transform.forward * currentSpeed * Time.fixedDeltaTime;
     }
 
     private void CalculateJerk() {
@@ -580,7 +617,6 @@ public class CarController : NetworkBehaviour
     public void UpdateTick()
     {
         HandleTick();
-        currentTick++;
     }
 
     void HandleTick()
@@ -601,7 +637,51 @@ public class CarController : NetworkBehaviour
         inputPayload.inputSteering = inputSteering;
 
         inputBuffer[bufferIndex] = inputPayload;
-        stateBuffer[bufferIndex] = ProcessMovement(inputPayload);
+        stateBuffer[bufferIndex] = UpdateClientMovement(inputPayload);
+
+        SubmitInputServerRpc(inputPayload);
+    }
+
+    StatePayload UpdateClientMovement(InputPayload input)
+    {
+        float accel = Mathf.Clamp(input.inputAcceleration, -1, 1);
+        float steer = Mathf.Clamp(input.inputSteering, -1, 1);
+        float brake = Mathf.Clamp(input.inputBrake, 0, 1);
+
+        if (Mathf.Abs(accel) > 0.01f)
+        {
+            currentSpeed += accel * accelerationRate * Time.fixedDeltaTime;
+        }
+        else
+        {
+            currentSpeed = Mathf.Lerp(currentSpeed, 0, decelerationRate * Time.fixedDeltaTime);
+        }
+
+        if (brake > 0.1f)
+        {
+            currentSpeed = Mathf.Lerp(currentSpeed, 0, brakeRate * Time.fixedDeltaTime);
+        }
+
+        float currentMaxForward = RubberBand ? maxSpeed * NetworkPlayer.RubberBandCoefficient : maxSpeed;
+        currentSpeed = Mathf.Clamp(currentSpeed, -maxReverseSpeed, currentMaxForward);
+
+        if (Mathf.Abs(currentSpeed) > 0.5f)
+        {
+            float directionMultiplier = Mathf.Sign(currentSpeed);
+            float turnAmount = steer * turnSpeed * directionMultiplier * Time.fixedDeltaTime;
+            transform.Rotate(0, turnAmount, 0);
+        }
+
+        transform.position += transform.forward * currentSpeed * Time.fixedDeltaTime;
+        //_rigidbody.velocity = transform.forward * currentSpeed;
+
+        return new StatePayload()
+        {
+            tick = input.tick,
+            position = transform.position,
+            rotation = transform.rotation.eulerAngles,
+            speed = currentSpeed
+        };
     }
 
     StatePayload ProcessMovement(InputPayload input)
@@ -634,8 +714,8 @@ public class CarController : NetworkBehaviour
             transform.Rotate(0, turnAmount, 0);
         }
 
-        //transform.position += transform.forward * currentSpeed * Time.fixedDeltaTime;
-        _rigidbody.velocity = transform.forward * currentSpeed;
+        transform.position += transform.forward * currentSpeed * Time.fixedDeltaTime;
+        //_rigidbody.velocity = transform.forward * currentSpeed;
 
         return new StatePayload()
         {
@@ -650,10 +730,11 @@ public class CarController : NetworkBehaviour
     {
         lastProcessedState = latestServerState;
 
+
         int serverStateBufferIndex = latestServerState.tick % BUFFER_SIZE;
         float positionError = Vector3.Distance(latestServerState.position, stateBuffer[serverStateBufferIndex].position);
 
-        if (positionError > 100f)
+        if (positionError > 1f)
         {
             Debug.Log("Reconcile now");
 
@@ -673,7 +754,20 @@ public class CarController : NetworkBehaviour
                 tickToProcess++;
             }
 
-            _rigidbody.velocity = transform.forward * currentSpeed;
+            //_rigidbody.velocity = transform.forward * currentSpeed;
+        }
+    }
+
+    [Rpc(SendTo.Server)]
+    public void SubmitInputServerRpc(InputPayload input)
+    {
+        this.inputAcceleration = input.inputAcceleration;
+        this.inputSteering = input.inputSteering;
+        this.inputBrake = input.inputBrake;
+        
+        if (!pendingInputs.ContainsKey(input.tick))
+        {
+            pendingInputs.Add(input.tick, input);
         }
     }
     #endregion
