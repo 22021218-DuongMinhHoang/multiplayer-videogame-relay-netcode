@@ -45,6 +45,8 @@ public class NetworkPlayer : NetworkBehaviour
     private readonly NetworkVariable<bool> _networkHasFinished = new(writePerm:NetworkVariableWritePermission.Owner);
     private readonly NetworkVariable<bool> _networkReady = new(writePerm:NetworkVariableWritePermission.Owner);
     private readonly NetworkVariable<bool> _networkRacing = new(writePerm:NetworkVariableWritePermission.Owner);
+
+    private CarController carController;
     
     [SerializeField] [HideInInspector] private TMP_InputField _chatMessage;
     [SerializeField] [HideInInspector] private float _rubberBandCoefficient = 1f;  // Catch up coefficient too
@@ -136,6 +138,18 @@ public class NetworkPlayer : NetworkBehaviour
     private bool IsInsideCheckpoint => 
         CurrentPos > lastLapPos + APP_CONFIG.GAME.CHECKPOINT_DISTANCE && CurrentPos < lastLapPos + 
         APP_CONFIG.GAME.CHECKPOINT_DISTANCE * 1.1f;
+
+    public CarController GetCarController
+    {
+        get
+        {
+            if (car != null && carController == null)
+            {
+                carController = car.GetComponent<CarController>();
+            }
+            return carController;
+        }
+    }
 
     #endregion
 

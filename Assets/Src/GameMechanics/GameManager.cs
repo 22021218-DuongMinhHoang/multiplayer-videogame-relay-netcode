@@ -279,10 +279,7 @@ public class GameManager : MonoBehaviour
     }
     
     [Header("Bot Settings")]
-    // Kéo GameObject cha chứa các điểm Waypoints vào đây trong Inspector
     [SerializeField] public Transform waypointContainer; 
-
-    // Helper function để lấy list điểm nhanh (Optional)
     public List<Transform> GetLevelWaypoints()
     {
         List<Transform> points = new List<Transform>();
@@ -294,6 +291,4 @@ public class GameManager : MonoBehaviour
     }
 
     #endregion
-
-    
 }

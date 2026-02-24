@@ -26,7 +26,7 @@ public struct StatePayload : INetworkSerializable
 {
     public int tick;
     public Vector3 position;
-    public Vector3 rotation;
+    public Quaternion rotation;
     public float speed;
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
@@ -381,7 +381,7 @@ public class CarController : NetworkBehaviour
         latestServerState = new StatePayload();
         latestServerState.tick = newVal.Tick;
         latestServerState.position = newVal.Position;
-        latestServerState.rotation = newVal.Rotation;
+        latestServerState.rotation = Quaternion.Euler(newVal.Rotation);
         latestServerState.speed = newVal.Speed;
     }
 
@@ -464,7 +464,11 @@ public class CarController : NetworkBehaviour
 
                 if (pendingInputs.TryGetValue(nextTick, out var input))
                 {
-                    ProcessMovement(input);
+                    RaceManager.Instance.PendInput(ID, input);
+
+                    StatePayload processedState = ProcessMovement(input);
+
+                    RaceManager.Instance.PendState(ID, processedState);
 
                     lastProcessedTick = nextTick;
                     pendingInputs.Remove(nextTick);
@@ -679,12 +683,12 @@ public class CarController : NetworkBehaviour
         {
             tick = input.tick,
             position = transform.position,
-            rotation = transform.rotation.eulerAngles,
+            rotation = transform.rotation,
             speed = currentSpeed
         };
     }
 
-    StatePayload ProcessMovement(InputPayload input)
+    public StatePayload ProcessMovement(InputPayload input)
     {
         float accel = Mathf.Clamp(input.inputAcceleration, -1, 1);
         float steer = Mathf.Clamp(input.inputSteering, -1, 1);
@@ -721,7 +725,7 @@ public class CarController : NetworkBehaviour
         {
             tick = input.tick,
             position = transform.position,
-            rotation = transform.rotation.eulerAngles,
+            rotation = transform.rotation,
             speed = currentSpeed
         };
     }
@@ -734,13 +738,11 @@ public class CarController : NetworkBehaviour
         int serverStateBufferIndex = latestServerState.tick % BUFFER_SIZE;
         float positionError = Vector3.Distance(latestServerState.position, stateBuffer[serverStateBufferIndex].position);
 
-        if (positionError > 1f)
+        if (positionError > 0.01f)
         {
             Debug.Log("Reconcile now");
 
-            transform.position = latestServerState.position;
-            transform.rotation = Quaternion.Euler(latestServerState.rotation);
-            currentSpeed = latestServerState.speed;
+            ApplyState(latestServerState);
 
             stateBuffer[serverStateBufferIndex] = latestServerState;
 
@@ -769,6 +771,25 @@ public class CarController : NetworkBehaviour
         {
             pendingInputs.Add(input.tick, input);
         }
+    }
+
+    public void ApplyState(StatePayload state)
+    {
+        transform.position = state.position;
+        transform.rotation = state.rotation;
+        currentSpeed = state.speed;
+
+        _rigidbody.velocity = transform.forward * currentSpeed;
+    }
+
+    public StatePayload GetStateOfCar()
+    {
+        return new StatePayload()
+        {
+            position = transform.position,
+            rotation = transform.rotation,
+            speed = _rigidbody.velocity.magnitude
+        };
     }
     #endregion
 }

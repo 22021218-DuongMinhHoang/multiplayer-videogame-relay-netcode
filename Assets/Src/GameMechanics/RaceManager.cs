@@ -353,4 +353,114 @@ public class RaceManager : MonoBehaviour
     }
 
     #endregion
+
+    #region Server Rewind
+
+    [SerializeField] int bufferSize = 10000;
+    private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
+    private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
+
+    public void PendInput(int id, InputPayload input)
+    {
+        if (id < 0 && id >= 4) return;
+
+        int tick = input.tick;
+
+        if (inputBufferDict.Count == bufferSize)
+        {
+            if (tick < inputBufferDict.Keys.First()) return;
+            else inputBufferDict.Remove(inputBufferDict.Keys.First());
+        }
+
+        if (!inputBufferDict.ContainsKey(tick)) inputBufferDict.Add(tick, new InputPayload[4]);
+
+        InputPayload[] inputBuffer = inputBufferDict[tick];
+
+        inputBuffer[id] = input;
+    }
+
+    public void PendState(int id, StatePayload state)
+    {
+        if (id < 0 && id >= 4) return;
+
+        int tick = state.tick;
+
+        if (stateBufferDict.Count == bufferSize)
+        {
+            if (tick < stateBufferDict.Keys.First()) return;
+            else stateBufferDict.Remove(stateBufferDict.Keys.First());
+        }
+
+        bool canRewind = false;
+
+        if (!stateBufferDict.ContainsKey(tick)) 
+        {
+            stateBufferDict.Add(tick, new StatePayload[4]);
+
+            if (tick < stateBufferDict.Keys.Last())
+            {
+                canRewind = true;
+            }
+        }
+
+        StatePayload[] stateBuffer = stateBufferDict[tick];
+
+        stateBuffer[id] = state;
+
+        if (canRewind)
+        {
+            RewindServer(tick);
+        }
+    }
+
+    private void RewindServer(int tick)
+    {
+        if (stateBufferDict.ContainsKey(tick))
+        {
+            //apply first car state
+            StatePayload[] firstState = stateBufferDict[tick];
+
+            CarController[] carList = new CarController[4];
+
+            foreach (var player in players)
+            {
+                if (player.ID >= 0 && player.ID < 4)
+                {
+                    CarController car = player.GetCarController;
+                    car.ApplyState(firstState[player.ID]);
+
+                    carList[player.ID] = car;
+                }
+            }
+
+            //simulate first tick physics
+            Physics.Simulate(Time.fixedDeltaTime);
+
+            //rewind til present
+            int tickToProcess = tick + 1;
+            int lastTick = stateBufferDict.Keys.Last();
+
+            while (tickToProcess <= lastTick)
+            {
+                foreach (var car in carList)
+                {
+                    if (stateBufferDict.ContainsKey(tickToProcess) && !stateBufferDict[tickToProcess][car.ID].Equals(default))
+                    {
+                        car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
+                    }
+                }
+
+                Physics.Simulate(Time.fixedDeltaTime);
+
+                foreach (var car in carList)
+                {
+                    stateBufferDict[tickToProcess][car.ID] = car.GetStateOfCar();
+                }
+            }
+
+            Debug.Log("Server Rewinded");
+        }
+    }
+
+    #endregion
 }
