@@ -381,7 +381,7 @@ public class RaceManager : MonoBehaviour
 
     public void PendState(int id, StatePayload state)
     {
-        if (id < 0 && id >= 4) return;
+        if (id < 0 || id >= 4) return;
 
         int tick = state.tick;
 
@@ -393,30 +393,32 @@ public class RaceManager : MonoBehaviour
 
         bool canRewind = false;
 
+        if (stateBufferDict.Count > 0 && tick < stateBufferDict.Keys.Last())
+        {
+            canRewind = true;
+        }
+
         if (!stateBufferDict.ContainsKey(tick)) 
         {
             stateBufferDict.Add(tick, new StatePayload[4]);
-
-            if (tick < stateBufferDict.Keys.Last())
-            {
-                canRewind = true;
-            }
         }
 
         StatePayload[] stateBuffer = stateBufferDict[tick];
 
         stateBuffer[id] = state;
 
-        if (canRewind)
-        {
-            RewindServer(tick);
-        }
+        // if (canRewind)
+        // {
+        //     RewindServer(tick);
+        // }
     }
 
     private void RewindServer(int tick)
     {
-        if (stateBufferDict.ContainsKey(tick))
+        if (inputBufferDict.ContainsKey(tick))
         {
+            Physics.simulationMode = SimulationMode.Script;
+
             //apply first car state
             StatePayload[] firstState = stateBufferDict[tick];
 
@@ -424,12 +426,15 @@ public class RaceManager : MonoBehaviour
 
             foreach (var player in players)
             {
-                if (player.ID >= 0 && player.ID < 4)
+                if (player != null && player.ID >= 0 && player.ID < 4)
                 {
                     CarController car = player.GetCarController;
-                    car.ApplyState(firstState[player.ID]);
 
-                    carList[player.ID] = car;
+                    if (car != null)
+                    {
+                        car.ApplyState(firstState[player.ID]);
+                        carList[player.ID] = car;
+                    }
                 }
             }
 
@@ -438,29 +443,217 @@ public class RaceManager : MonoBehaviour
 
             //rewind til present
             int tickToProcess = tick + 1;
-            int lastTick = stateBufferDict.Keys.Last();
+            int lastTick = inputBufferDict.Keys.Last();
 
             while (tickToProcess <= lastTick)
             {
                 foreach (var car in carList)
                 {
-                    if (stateBufferDict.ContainsKey(tickToProcess) && !stateBufferDict[tickToProcess][car.ID].Equals(default))
+                    if (car != null)
                     {
-                        car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
+                        // Debug.Log(
+                        //     "stateBufferDict: " + stateBufferDict +
+                        //     " car: " + car +
+                        //     " car.ID" + car.ID
+                        // );
+
+
+                        if (
+                            inputBufferDict.ContainsKey(tickToProcess) 
+                            && !inputBufferDict[tickToProcess][car.ID].Equals(default))
+                        {
+                            car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
+                        }
                     }
+                    
                 }
 
                 Physics.Simulate(Time.fixedDeltaTime);
 
                 foreach (var car in carList)
                 {
-                    stateBufferDict[tickToProcess][car.ID] = car.GetStateOfCar();
+                    if (car != null) stateBufferDict[tickToProcess][car.ID] = car.GetStateOfCar();
                 }
+
+                tickToProcess++;
             }
 
             Debug.Log("Server Rewinded");
+            Physics.simulationMode = SimulationMode.FixedUpdate;
         }
     }
 
     #endregion
+
+//     #region Server Rewind
+
+// [SerializeField] int bufferSize = 10000;
+// // NOTE: Consider replacing SortedDictionary with a ring buffer for perf.
+// private readonly object _rewindLock = new();
+// private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
+// private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
+
+// public void PendInput(int id, InputPayload input)
+// {
+//     // fix bound check: use OR
+//     if (id < 0 || id >= 4) return;
+
+//     int tick = input.tick;
+
+//     lock (_rewindLock)
+//     {
+//         // eviction when exceeded
+//         if (inputBufferDict.Count >= bufferSize)
+//         {
+//             var firstKey = inputBufferDict.Keys.First();
+//             if (tick < firstKey) return;
+//             inputBufferDict.Remove(firstKey);
+//         }
+
+//         if (!inputBufferDict.ContainsKey(tick))
+//         {
+//             inputBufferDict.Add(tick, new InputPayload[4]);
+//         }
+
+//         var inputArr = inputBufferDict[tick];
+//         inputArr[id] = input;
+//     }
+// }
+
+// public void PendState(int id, StatePayload state)
+// {
+//     if (id < 0 || id >= 4) return;
+
+//     int tick = state.tick;
+
+//     lock (_rewindLock)
+//     {
+//         if (stateBufferDict.Count >= bufferSize)
+//         {
+//             var firstKey = stateBufferDict.Keys.First();
+//             if (tick < firstKey) return;
+//             stateBufferDict.Remove(firstKey);
+//         }
+
+//         bool canRewind = stateBufferDict.Count > 0 && tick < stateBufferDict.Keys.Last();
+
+//         if (!stateBufferDict.ContainsKey(tick))
+//         {
+//             stateBufferDict.Add(tick, new StatePayload[4]);
+//         }
+
+//         var stateArr = stateBufferDict[tick];
+//         stateArr[id] = state;
+
+//         if (canRewind)
+//         {
+//             // run rewind on server main thread / within lock to avoid concurrent modifications
+//             RewindServer(tick);
+//         }
+//     }
+// }
+
+// private void RewindServer(int tick)
+// {
+//     lock (_rewindLock)
+//     {
+//         if (!stateBufferDict.ContainsKey(tick)) return;
+
+//         // ensure we control physics stepping
+//         // bool oldAuto = Physics.autoSimulation;
+//         // Physics.autoSimulation = false;
+
+//         Physics.simulationMode = SimulationMode.Script;
+
+//         try
+//         {
+//             // prepare cars array
+//             CarController[] carList = new CarController[4];
+//             StatePayload[] firstState = stateBufferDict[tick];
+
+//             foreach (var player in players)
+//             {
+//                 if (player == null) continue;
+//                 int id = player.ID;
+//                 if (id < 0 || id >= 4) continue;
+
+//                 CarController car = player.GetCarController;
+//                 if (car == null) continue;
+
+//                 carList[id] = car;
+
+//                 // if we have a valid state for this car at that tick, apply it.
+//                 if (!firstState[id].Equals(default(StatePayload)))
+//                 {
+//                     car.ApplyState(firstState[id]);
+//                 }
+//                 else
+//                 {
+//                     // no recorded state for this car at that tick - try best-effort: leave as-is or initialize
+//                     // Optionally: sample nearest previous snapshot or set to current transform
+//                 }
+//             }
+
+//             // simulate the restore tick once (physics now consistent at `tick`)
+//             Physics.Simulate(Time.fixedDeltaTime);
+
+//             int tickToProcess = tick + 1;
+//             int lastTick = stateBufferDict.Keys.Last();
+
+//             // re-simulate forward to latest tick
+//             while (tickToProcess <= lastTick)
+//             {
+//                 // ensure arrays exist for this tick to store results
+//                 if (!stateBufferDict.ContainsKey(tickToProcess))
+//                 {
+//                     stateBufferDict.Add(tickToProcess, new StatePayload[4]);
+//                 }
+
+//                 // apply inputs for each car (use default input if missing)
+//                 for (int id = 0; id < carList.Length; id++)
+//                 {
+//                     var car = carList[id];
+//                     if (car == null) continue;
+
+//                     InputPayload inputToApply = default;
+//                     if (inputBufferDict.ContainsKey(tickToProcess))
+//                     {
+//                         var inArr = inputBufferDict[tickToProcess];
+//                         // check array bounds and default
+//                         inputToApply = inArr != null ? inArr[id] : default;
+//                     }
+//                     // IMPORTANT: always call ProcessMovement with some input (default = no-op)
+//                     car.ProcessMovement(inputToApply);
+//                 }
+
+//                 // step physics for this tick
+//                 Physics.Simulate(Time.fixedDeltaTime);
+
+//                 // capture states after simulate
+//                 for (int id = 0; id < carList.Length; id++)
+//                 {
+//                     var car = carList[id];
+//                     if (car == null) continue;
+
+//                     var stateNow = car.GetStateOfCar();
+//                     // ensure array exists (we added above)
+//                     stateBufferDict[tickToProcess][id] = stateNow;
+//                 }
+
+//                 tickToProcess++;
+//             }
+
+//             // after re-sim, world (transforms / rigidbodies) reflect authoritative state at lastTick
+//             // TODO: broadcast authoritative snapshot to clients (and prune input buffer up to lastTick)
+//             Debug.Log($"Server Rewinded from tick {tick} to {lastTick}");
+//         }
+//         finally
+//         {
+//             // restore physics autoSimulation
+//             Physics.simulationMode = SimulationMode.FixedUpdate;
+//         }
+//     }
+// }
+
+// #endregion
 }
