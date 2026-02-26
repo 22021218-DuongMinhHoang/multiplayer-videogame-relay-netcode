@@ -114,16 +114,17 @@ public class CarController : NetworkBehaviour
     private float waypointThreshold = 5.0f;
 
     // --- DEAD RECKONING VARIABLES ---
-    public bool UseDeadReckoning = false;
+    public bool UseDeadReckoning = true;
     public enum CorrectionMode { SmoothDamp, Lerp }
 
     [Header("Dead Reckoning Configuration")]
-    [SerializeField] private DeadReckoningMode currentDRMode = DeadReckoningMode.Linear;
+    [SerializeField] private DeadReckoningMode currentDRMode = DeadReckoningMode.Quadratic;
     [SerializeField] private CorrectionMode currentCorrectionMode = CorrectionMode.SmoothDamp;
     [SerializeField] private float snapThreshold = 10f; 
     
     [Header("Client Side Prediction and Server Reconcilation")]
     private int currentTick;
+    private int serverCarTick;
     private int serverProcessTick;
     private float minTimeBetweenTicks;
     private const float SERVER_TICK_RATE = 30f;
@@ -137,8 +138,8 @@ public class CarController : NetworkBehaviour
     private int lastProcessedTick;
 
     public bool _useCubicSpline = false;
-    public bool _useAdaptiveThreshold = false;
-    public bool _useTimeSync = false;
+    public bool _useAdaptiveThreshold = true;
+    public bool _useTimeSync = true;
 
     private Vector3 _serverPos;
     private Vector3 _serverVel;     
@@ -202,6 +203,14 @@ public class CarController : NetworkBehaviour
                 RocketPanel.SetActive(true); 
             }
             MoveToPositionRpc(GameManager.Instance.RACE_POS[NetworkPlayer.StartPos]);
+
+            stateBuffer[0] = new StatePayload()
+            {
+                tick = 0,
+                position = GameManager.Instance.RACE_POS[NetworkPlayer.StartPos],
+                rotation = Quaternion.Euler(Vector3.zero)
+            };
+
             SwitchVisibilityRpc();
             ResetStatsRpc();
             NetworkPlayer.Location = "/game"; NetworkPlayer.FinishRawTime = 0f; NetworkPlayer.Rockets = 0; NetworkPlayer.HasFinished = false;
@@ -458,23 +467,41 @@ public class CarController : NetworkBehaviour
                 UpdateTick();
                 currentTick++;
             }
-            else 
+            else if (IsServer)
             {
-                int nextTick = lastProcessedTick + 1;
-
-                if (pendingInputs.TryGetValue(nextTick, out var input))
+                if (IsOwner)
                 {
-                    RaceManager.Instance.PendInput(ID, input);
+                    InputPayload inputPayload = new InputPayload();
+                    inputPayload.tick = serverCarTick;
+                    inputPayload.inputAcceleration = inputAcceleration;
+                    inputPayload.inputBrake = inputBrake;
+                    inputPayload.inputSteering = inputSteering;                    
+                    RaceManager.Instance.PendInput(ID, inputPayload);
 
-                    StatePayload processedState = ProcessMovement(input);
-
+                    StatePayload processedState = ProcessMovement(inputPayload);
                     RaceManager.Instance.PendState(ID, processedState);
+                    serverCarTick++;
+                }
+                else
+                {
+                    int nextTick = lastProcessedTick + 1;
 
-                    lastProcessedTick = nextTick;
-                    pendingInputs.Remove(nextTick);
+                    if (pendingInputs.TryGetValue(nextTick, out var input))
+                    {
+                        RaceManager.Instance.PendInput(ID, input);
+
+                        StatePayload processedState = ProcessMovement(input);
+
+                        RaceManager.Instance.PendState(ID, processedState);
+
+                        lastProcessedTick = nextTick;
+                        pendingInputs.Remove(nextTick);
+                    }
+
+                    //UpdateLocalPos();
                 }
 
-                //UpdateLocalPos();
+                
             }
 
             
@@ -628,7 +655,8 @@ public class CarController : NetworkBehaviour
 
     void HandleTick()
     {
-        if (!latestServerState.Equals(default(StatePayload)) &&
+        if (!IsServer &&
+            !latestServerState.Equals(default(StatePayload)) &&
             (lastProcessedState.Equals(default(StatePayload)) ||
             !latestServerState.Equals(lastProcessedState)))
         {
@@ -754,9 +782,8 @@ public class CarController : NetworkBehaviour
         int serverStateBufferIndex = latestServerState.tick % BUFFER_SIZE;
         float positionError = Vector3.Distance(latestServerState.position, stateBuffer[serverStateBufferIndex].position);
 
-        if (positionError > 0.5f)
+        if (positionError > 0.01f)
         {
-            Debug.Log("Reconcile now");
 
             Physics.simulationMode = SimulationMode.Script;
 

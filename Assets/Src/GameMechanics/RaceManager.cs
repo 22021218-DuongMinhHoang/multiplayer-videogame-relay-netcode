@@ -108,6 +108,20 @@ public class RaceManager : MonoBehaviour
 
         // Debug coroutine
         // StartCoroutine(PrintDebugRaceOrder());
+
+        StatePayload[] initStateArr = new StatePayload[4];
+
+        for (int i = 0; i < 4; i++)
+        {
+            initStateArr[i] = new StatePayload()
+            {
+                tick = 0,
+                position = GameManager.Instance.RACE_POS[i],
+                rotation = Quaternion.Euler(Vector3.zero)  
+            };
+        }
+
+        stateBufferDict.Add(0, initStateArr);
     }
 
     private void Update()
@@ -359,6 +373,12 @@ public class RaceManager : MonoBehaviour
     [SerializeField] int bufferSize = 10000;
     private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
     private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
+    int serverTick;
+
+    void FixedUpdate()
+    {
+        if (GameManager.Instance.State == GameState.Started) serverTick++;
+    }
 
     public void PendInput(int id, InputPayload input)
     {
@@ -393,7 +413,7 @@ public class RaceManager : MonoBehaviour
 
         bool canRewind = false;
 
-        if (stateBufferDict.Count > 0 && tick < stateBufferDict.Keys.Last())
+        if (stateBufferDict.Count > 0 && tick < serverTick)
         {
             canRewind = true;
         }
@@ -407,10 +427,10 @@ public class RaceManager : MonoBehaviour
 
         stateBuffer[id] = state;
 
-        // if (canRewind)
-        // {
-        //     RewindServer(tick);
-        // }
+        if (canRewind)
+        {
+            RewindServer(tick);
+        }
     }
 
     private void RewindServer(int tick)
@@ -478,7 +498,7 @@ public class RaceManager : MonoBehaviour
                 tickToProcess++;
             }
 
-            Debug.Log("Server Rewinded");
+            //Debug.Log("Server Rewinded");
             Physics.simulationMode = SimulationMode.FixedUpdate;
         }
     }
