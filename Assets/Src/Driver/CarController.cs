@@ -6,7 +6,7 @@ using TMPro;
 using Unity.Netcode;
 using UnityEngine;
 
-public struct InputPayload : INetworkSerializable
+public class InputPayload : INetworkSerializable
 {
     public int tick;
     public float inputAcceleration;
@@ -20,9 +20,17 @@ public struct InputPayload : INetworkSerializable
         serializer.SerializeValue(ref inputSteering);
         serializer.SerializeValue(ref inputBrake);
     }
+
+    public void Copy(InputPayload input)
+    {
+        tick = input.tick;
+        inputAcceleration = input.inputAcceleration;
+        inputSteering = input.inputSteering;
+        inputBrake = input.inputBrake;
+    }
 }
 
-public struct StatePayload : INetworkSerializable
+public class StatePayload : INetworkSerializable
 {
     public int tick;
     public Vector3 position;
@@ -35,6 +43,14 @@ public struct StatePayload : INetworkSerializable
         serializer.SerializeValue(ref position);
         serializer.SerializeValue(ref rotation);
         serializer.SerializeValue(ref speed);
+    }
+
+    public void Copy(StatePayload state)
+    {
+        tick = state.tick;
+        position = state.position;
+        rotation = state.rotation;
+        speed = state.speed;
     }
 }
 
@@ -656,8 +672,8 @@ public class CarController : NetworkBehaviour
     void HandleTick()
     {
         if (!IsServer &&
-            !latestServerState.Equals(default(StatePayload)) &&
-            (lastProcessedState.Equals(default(StatePayload)) ||
+            latestServerState != null &&
+            (lastProcessedState == null ||
             !latestServerState.Equals(lastProcessedState)))
         {
             HandleServerReconciliation();
