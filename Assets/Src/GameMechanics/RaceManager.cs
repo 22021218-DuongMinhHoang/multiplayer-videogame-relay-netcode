@@ -375,6 +375,8 @@ public class RaceManager : MonoBehaviour
     private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
     int serverTick;
 
+    bool isRewinding = false;
+
     void FixedUpdate()
     {
         if (GameManager.Instance.State == GameState.Started) serverTick++;
@@ -438,10 +440,10 @@ public class RaceManager : MonoBehaviour
 
     private void RewindServer(int tick)
     {
-        if (inputBufferDict.ContainsKey(tick))
+        if (!isRewinding && inputBufferDict.ContainsKey(tick))
         {
             Physics.simulationMode = SimulationMode.Script;
-
+            isRewinding = true;
             //apply first car state
             StatePayload[] firstState = stateBufferDict[tick];
 
@@ -503,6 +505,7 @@ public class RaceManager : MonoBehaviour
 
             //Debug.Log("Server Rewinded");
             Physics.simulationMode = SimulationMode.FixedUpdate;
+            isRewinding = false;
         }
     }
 

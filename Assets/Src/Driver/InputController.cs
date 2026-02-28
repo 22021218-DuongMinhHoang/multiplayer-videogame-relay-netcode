@@ -84,4 +84,30 @@ public class InputController : NetworkBehaviour
     {
         if (context.performed) UIManager.Instance.chatController.WriteChatMessage();
     }
+
+    // void Update()
+    // {
+    //     if (!IsOwner) return;
+    //     if (_carController == null) return;
+
+    //     float accel = 0f;
+    //     if (Input.GetKey(KeyCode.UpArrow)) accel = 1f;
+    //     if (Input.GetKey(KeyCode.DownArrow)) accel = -1f;
+
+    //     float steer = 0f;
+    //     if (Input.GetKey(KeyCode.RightArrow)) steer = 1f;
+    //     if (Input.GetKey(KeyCode.LeftArrow)) steer = -1f;
+
+    //     accel = Mathf.Clamp(accel, -1f, 1f);
+    //     steer = Mathf.Clamp(steer, -1f, 1f);
+
+    //     Vector2 currentMove = new Vector2(steer, accel);
+
+    //     float brake = 0;
+    //     if (Input.GetKey(KeyCode.Space)) brake = 1;
+
+    //     _carController.inputAcceleration = currentMove.y;
+    //     _carController.inputSteering = currentMove.x;
+    //     _carController.inputBrake = brake;
+    // }
 }

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using CustomTypes;
 using TMPro;
 using Unity.Netcode;
@@ -28,6 +29,18 @@ public class InputPayload : INetworkSerializable
         inputSteering = input.inputSteering;
         inputBrake = input.inputBrake;
     }
+
+    public override bool Equals(object obj) {
+        if (obj is not InputPayload other) return false;
+        return 
+            tick == other.tick &&  
+            Mathf.Approximately(inputAcceleration, other.inputAcceleration) && 
+            Mathf.Approximately(inputSteering, other.inputSteering) && 
+            Mathf.Approximately(inputBrake, other.inputBrake);
+    }
+    public override int GetHashCode() {
+        return tick.GetHashCode();
+    }
 }
 
 public class StatePayload : INetworkSerializable
@@ -51,6 +64,14 @@ public class StatePayload : INetworkSerializable
         position = state.position;
         rotation = state.rotation;
         speed = state.speed;
+    }
+
+    public override bool Equals(object obj) {
+        if (obj is not StatePayload other) return false;
+        return tick == other.tick && position == other.position && rotation == other.rotation && Mathf.Approximately(speed, other.speed);
+    }
+    public override int GetHashCode() {
+        return tick.GetHashCode();
     }
 }
 
@@ -105,12 +126,12 @@ public class CarController : NetworkBehaviour
     [SerializeField] [HideInInspector] private Rigidbody _rigidbody;
 
     [Header("Arcade Movement")]
-    [SerializeField] public float maxSpeed = 40f;          // Tốc độ tối đa khi tiến
-    [SerializeField] public float maxReverseSpeed = 20f;   // Tốc độ tối đa khi lùi
-    [SerializeField] public float accelerationRate = 20f;  // Gia tốc
-    [SerializeField] public float decelerationRate = 10f;  // Tốc độ giảm tốc khi thả phím
-    [SerializeField] public float brakeRate = 30f;         // Lực phanh
-    [SerializeField] public float turnSpeed = 120f;        // Tốc độ xoay xe
+    [SerializeField] public float maxSpeed = 40f;
+    [SerializeField] public float maxReverseSpeed = 20f;
+    [SerializeField] public float accelerationRate = 20f;
+    [SerializeField] public float decelerationRate = 10f;
+    [SerializeField] public float brakeRate = 30f;
+    [SerializeField] public float turnSpeed = 120f;
 
     [SerializeField] [HideInInspector] public float inputAcceleration;
     [SerializeField] [HideInInspector] public float inputSteering;
@@ -152,6 +173,9 @@ public class CarController : NetworkBehaviour
     private StatePayload lastProcessedState;
     private SortedDictionary<int, InputPayload> pendingInputs = new SortedDictionary<int, InputPayload>();
     private int lastProcessedTick;
+    private bool isRewinding = false;
+
+    private List<InputPayload> clientInputList;
 
     public bool _useCubicSpline = false;
     public bool _useAdaptiveThreshold = true;
@@ -678,7 +702,23 @@ public class CarController : NetworkBehaviour
         {
             HandleServerReconciliation();
         }
+        
+        // if (Mathf.Abs(inputAcceleration) > 0.01f || Mathf.Abs(inputSteering) > 0.01f || Mathf.Abs(inputBrake) > 0.01f)
+        // {
+        //     Debug.Log("Okay now");
+        //     int bufferIndex = currentTick % BUFFER_SIZE;
 
+        //     InputPayload inputPayload = new InputPayload();
+        //     inputPayload.tick = currentTick;
+        //     inputPayload.inputAcceleration = inputAcceleration;
+        //     inputPayload.inputBrake = inputBrake;
+        //     inputPayload.inputSteering = inputSteering;
+
+        //     inputBuffer[bufferIndex] = inputPayload;
+        //     stateBuffer[bufferIndex] = ProcessMovement(inputPayload);
+
+        //     SubmitInputServerRpc(inputPayload);
+        // }
         int bufferIndex = currentTick % BUFFER_SIZE;
 
         InputPayload inputPayload = new InputPayload();
@@ -691,6 +731,7 @@ public class CarController : NetworkBehaviour
         stateBuffer[bufferIndex] = ProcessMovement(inputPayload);
 
         SubmitInputServerRpc(inputPayload);
+        
     }
 
     StatePayload UpdateClientMovement(InputPayload input)
@@ -737,6 +778,7 @@ public class CarController : NetworkBehaviour
 
     public StatePayload ProcessMovement(InputPayload input)
     {
+        if (input == null) return null;
         float accel = Mathf.Clamp(input.inputAcceleration, -1, 1);
         float steer = Mathf.Clamp(input.inputSteering, -1, 1);
         float brake = Mathf.Clamp(input.inputBrake, 0, 1);
@@ -794,12 +836,15 @@ public class CarController : NetworkBehaviour
     {
         lastProcessedState = latestServerState;
 
-
         int serverStateBufferIndex = latestServerState.tick % BUFFER_SIZE;
+
+        if (stateBuffer[serverStateBufferIndex] == null) return;
+
         float positionError = Vector3.Distance(latestServerState.position, stateBuffer[serverStateBufferIndex].position);
 
-        if (positionError > 0.01f)
+        if (positionError > 0.1f && !isRewinding)
         {
+            isRewinding = true;
 
             Physics.simulationMode = SimulationMode.Script;
 
@@ -821,6 +866,7 @@ public class CarController : NetworkBehaviour
             //_rigidbody.velocity = transform.forward * currentSpeed;
 
             Physics.simulationMode = SimulationMode.FixedUpdate;
+            isRewinding = false;
         }
     }
 
@@ -834,16 +880,19 @@ public class CarController : NetworkBehaviour
         if (!pendingInputs.ContainsKey(input.tick))
         {
             pendingInputs.Add(input.tick, input);
+
+            if (pendingInputs.Count > 5000) pendingInputs.Remove(pendingInputs.Keys.First());
         }
     }
 
     public void ApplyState(StatePayload state)
     {
-        transform.position = state.position;
-        transform.rotation = state.rotation;
+        _rigidbody.position = state.position;
+        _rigidbody.rotation = state.rotation;
+        
+        // _rigidbody.velocity = state.rotation * Vector3.forward * state.speed;
+        // _rigidbody.angularVelocity = Vector3.zero;
         currentSpeed = state.speed;
-
-        //_rigidbody.velocity = transform.forward * currentSpeed;
     }
 
     public StatePayload GetStateOfCar()
@@ -852,8 +901,20 @@ public class CarController : NetworkBehaviour
         {
             position = transform.position,
             rotation = transform.rotation,
-            speed = _rigidbody.velocity.magnitude
+            speed = currentSpeed
         };
+    }
+
+    public void ClientPendNewInput(Vector2 moveInput, float brake)
+    {
+        InputPayload input = new InputPayload()
+        {
+            inputAcceleration = moveInput.y,
+            inputSteering = moveInput.x,
+            inputBrake = brake
+        };
+
+        clientInputList.Add(input);
     }
     #endregion
 }
