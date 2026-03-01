@@ -373,7 +373,7 @@ public class RaceManager : MonoBehaviour
     [SerializeField] int bufferSize = 10000;
     private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
     private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
-    int serverTick;
+    int serverTick = 1;
 
     bool isRewinding = false;
 
@@ -455,7 +455,7 @@ public class RaceManager : MonoBehaviour
                 {
                     CarController car = player.GetCarController;
 
-                    if (car != null && firstState[player.ID] != null)
+                    if (car != null && firstState[player.ID].tick != 0)
                     {
                         car.ApplyState(firstState[player.ID]);
                         carList[player.ID] = car;
@@ -485,7 +485,7 @@ public class RaceManager : MonoBehaviour
 
                         if (
                             inputBufferDict.ContainsKey(tickToProcess) 
-                            && inputBufferDict[tickToProcess][car.ID] != null)
+                            && inputBufferDict[tickToProcess][car.ID].tick != 0)
                         {
                             car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
                         }
