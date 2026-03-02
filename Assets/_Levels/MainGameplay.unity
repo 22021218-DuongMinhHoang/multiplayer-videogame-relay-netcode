@@ -17727,6 +17727,8 @@ MonoBehaviour:
   - {fileID: 0}
   _debugSpheres: []
   _debugRaceOrder: 
+  bufferSize: 10000
+  envBound: {fileID: 737063238}
 --- !u!1 &1405243406
 GameObject:
   m_ObjectHideFlags: 0
@@ -21889,6 +21891,10 @@ PrefabInstance:
       propertyPath: m_IsActive
       value: 1
       objectReference: {fileID: 0}
+    - target: {fileID: 83981736699377552, guid: e4f341a478065de4b93b6a6349d624fb, type: 3}
+      propertyPath: m_Enabled
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 83981736767065481, guid: e4f341a478065de4b93b6a6349d624fb, type: 3}
       propertyPath: m_IsActive
       value: 1
@@ -21923,7 +21929,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 2453216291059826205, guid: e4f341a478065de4b93b6a6349d624fb, type: 3}
       propertyPath: m_IsActive
-      value: 0
+      value: 1
       objectReference: {fileID: 0}
     - target: {fileID: 5728191895117530069, guid: e4f341a478065de4b93b6a6349d624fb, type: 3}
       propertyPath: m_RootOrder

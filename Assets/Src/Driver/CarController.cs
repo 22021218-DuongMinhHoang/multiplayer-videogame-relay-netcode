@@ -554,7 +554,7 @@ public class CarController : NetworkBehaviour
                 _networkData.Value = new PosAndRotNetworkData() { 
                     Position = transform.position, 
                     Rotation = transform.rotation.eulerAngles, 
-                    Velocity = currentSpeed * _rigidbody.rotation.eulerAngles, 
+                    Velocity = currentSpeed * transform.forward, 
                     Acceleration = (Time.fixedDeltaTime > 0) ? (currentSpeed * _rigidbody.rotation.eulerAngles - _serverVel) / Time.fixedDeltaTime : Vector3.zero,
                     Timestamp = Time.time,
                     Tick = lastProcessedTick,
@@ -615,39 +615,39 @@ public class CarController : NetworkBehaviour
     public void Update() { if (IsServer && IsSpawned) { var iSpeed = Mathf.FloorToInt(_rigidbody.velocity.magnitude); if (iSpeed != Speed) Speed = iSpeed; } }
 
     // --- LOGIC DI CHUYỂN ARCADE MỚI ---
-    void UpdateLocalPos() 
-    {
-        inputSteering = Mathf.Clamp(inputSteering, -1, 1); 
-        inputAcceleration = Mathf.Clamp(inputAcceleration, -1, 1); 
-        inputBrake = Mathf.Clamp(inputBrake, 0, 1);
+    // void UpdateLocalPos() 
+    // {
+    //     inputSteering = Mathf.Clamp(inputSteering, -1, 1); 
+    //     inputAcceleration = Mathf.Clamp(inputAcceleration, -1, 1); 
+    //     inputBrake = Mathf.Clamp(inputBrake, 0, 1);
 
-        if (Mathf.Abs(inputAcceleration) > 0.01f)
-        {
-            currentSpeed += inputAcceleration * accelerationRate * Time.fixedDeltaTime;
-        }
-        else
-        {
-            currentSpeed = Mathf.Lerp(currentSpeed, 0, decelerationRate * Time.fixedDeltaTime);
-        }
+    //     if (Mathf.Abs(inputAcceleration) > 0.01f)
+    //     {
+    //         currentSpeed += inputAcceleration * accelerationRate * Time.fixedDeltaTime;
+    //     }
+    //     else
+    //     {
+    //         currentSpeed = Mathf.Lerp(currentSpeed, 0, decelerationRate * Time.fixedDeltaTime);
+    //     }
 
-        if (inputBrake > 0.1f)
-        {
-            currentSpeed = Mathf.Lerp(currentSpeed, 0, brakeRate * Time.fixedDeltaTime);
-        }
+    //     if (inputBrake > 0.1f)
+    //     {
+    //         currentSpeed = Mathf.Lerp(currentSpeed, 0, brakeRate * Time.fixedDeltaTime);
+    //     }
 
-        float currentMaxForward = RubberBand ? maxSpeed * NetworkPlayer.RubberBandCoefficient : maxSpeed;
-        currentSpeed = Mathf.Clamp(currentSpeed, -maxReverseSpeed, currentMaxForward);
+    //     float currentMaxForward = RubberBand ? maxSpeed * NetworkPlayer.RubberBandCoefficient : maxSpeed;
+    //     currentSpeed = Mathf.Clamp(currentSpeed, -maxReverseSpeed, currentMaxForward);
 
-        if (Mathf.Abs(currentSpeed) > 0.5f)
-        {
-            float directionMultiplier = Mathf.Sign(currentSpeed);
-            float turnAmount = inputSteering * turnSpeed * directionMultiplier * Time.fixedDeltaTime;
-            transform.Rotate(0, turnAmount, 0);
-        }
+    //     if (Mathf.Abs(currentSpeed) > 0.5f)
+    //     {
+    //         float directionMultiplier = Mathf.Sign(currentSpeed);
+    //         float turnAmount = inputSteering * turnSpeed * directionMultiplier * Time.fixedDeltaTime;
+    //         transform.Rotate(0, turnAmount, 0);
+    //     }
 
-        //_rigidbody.velocity = transform.forward * currentSpeed;
-        transform.position += transform.forward * currentSpeed * Time.fixedDeltaTime;
-    }
+    //     //_rigidbody.velocity = transform.forward * currentSpeed;
+    //     transform.position += transform.forward * currentSpeed * Time.fixedDeltaTime;
+    // }
 
     private void CalculateJerk() {
         float dt = Time.fixedDeltaTime; if (dt <= 0) return;
@@ -904,7 +904,7 @@ public class CarController : NetworkBehaviour
         {
             isRewinding = true;
 
-            Physics.simulationMode = SimulationMode.Script;
+            //Physics.simulationMode = SimulationMode.Script;
 
             ApplyState(latestServerState);
 
@@ -915,15 +915,15 @@ public class CarController : NetworkBehaviour
             while (tickToProcess < currentTick)
             {
                 int bufferIndex = tickToProcess % BUFFER_SIZE;
-                StatePayload statePayload = ProcessMovement(inputBuffer[bufferIndex]);
-                Physics.Simulate(Time.fixedDeltaTime);
+                StatePayload statePayload = RewindClient(inputBuffer[bufferIndex]);
+                //Physics.Simulate(Time.fixedDeltaTime);
                 stateBuffer[bufferIndex] = statePayload;
                 tickToProcess++;
             }
 
-            _rigidbody.velocity = transform.forward * currentSpeed;
+            //_rigidbody.velocity = transform.forward * currentSpeed;
 
-            Physics.simulationMode = SimulationMode.FixedUpdate;
+            //Physics.simulationMode = SimulationMode.FixedUpdate;
             isRewinding = false;
         }
     }

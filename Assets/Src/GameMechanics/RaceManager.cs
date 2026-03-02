@@ -6,6 +6,7 @@ using System.Text;
 using CustomTypes;
 using Unity.Netcode;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 [Serializable]
 public class RaceManager : MonoBehaviour
@@ -434,11 +435,109 @@ public class RaceManager : MonoBehaviour
 
         if (canRewind)
         {
-            RewindServer(tick);
+            RewindServerNoPhysicsScene(tick);
         }
     }
 
     private void RewindServer(int tick)
+    {
+        if (!isRewinding && inputBufferDict.ContainsKey(tick))
+        {
+            //Physics.simulationMode = SimulationMode.Script;
+            isRewinding = true;
+            //apply first car state
+            StatePayload[] firstState = stateBufferDict[tick];
+
+            // CarController[] carList = new CarController[4];
+
+            // foreach (var player in players)
+            // {
+            //     if (player != null && player.ID >= 0 && player.ID < 4)
+            //     {
+            //         CarController car = player.GetCarController;
+
+            //         if (car != null && firstState[player.ID].tick != 0)
+            //         {
+            //             car.ApplyState(firstState[player.ID]);
+            //             carList[player.ID] = car;
+            //         }
+            //     }
+            // }
+
+            if (physicsScene == null || physicsSceneCarList == null) InitScene();
+            else
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    CarController car = physicsSceneCarList[i];
+
+                    if (car != null && firstState[i].tick != 0)
+                    {
+                        car.ApplyState(firstState[i]);
+                    }
+                }
+
+                //simulate first tick physics
+                //Physics.Simulate(Time.fixedDeltaTime);
+
+                //rewind til present
+                int tickToProcess = tick + 1;
+                int lastTick = inputBufferDict.Keys.Last();
+
+                while (tickToProcess <= lastTick)
+                {
+                    foreach (var car in physicsSceneCarList)
+                    {
+                        if (car != null)
+                        {
+                            // Debug.Log(
+                            //     "stateBufferDict: " + stateBufferDict +
+                            //     " car: " + car +
+                            //     " car.ID" + car.ID
+                            // );
+
+
+                            if (
+                                inputBufferDict.ContainsKey(tickToProcess) 
+                                && inputBufferDict[tickToProcess][car.ID].tick != 0)
+                            {
+                                car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
+                            }
+                        }
+                        
+                    }
+
+                    //Physics.Simulate(Time.fixedDeltaTime);
+                    physicsScene.Simulate(Time.fixedDeltaTime);
+
+                    foreach (var car in physicsSceneCarList)
+                    {
+                        if (car != null) stateBufferDict[tickToProcess][car.ID] = car.GetStateOfCar();
+                    }
+
+                    tickToProcess++;
+                }
+
+                for (int i = 0; i < 4; i++)
+                {
+                    CarController carReal = players[i].GetCarController;
+                    CarController carFake = physicsSceneCarList[i];
+
+                    if (carReal != null && carFake != null)
+                    {
+                        carReal.ApplyState(carFake.GetStateOfCar());
+                    }
+                }
+
+                //Debug.Log("Server Rewinded");
+                // Physics.simulationMode = SimulationMode.FixedUpdate;
+            }
+            
+            isRewinding = false;
+        }
+    }
+
+    private void RewindServerNoPhysicsScene(int tick)
     {
         if (!isRewinding && inputBufferDict.ContainsKey(tick))
         {
@@ -503,11 +602,53 @@ public class RaceManager : MonoBehaviour
                 tickToProcess++;
             }
 
-            //Debug.Log("Server Rewinded");
+                //Debug.Log("Server Rewinded");
             Physics.simulationMode = SimulationMode.FixedUpdate;
+            
             isRewinding = false;
         }
     }
+
+    #endregion
+
+    #region Physics Scene
+    [SerializeField] GameObject envBound;
+    private Scene extraScene;
+    private PhysicsScene physicsScene;
+    private CarController[] physicsSceneCarList;
+
+    public void InitScene()
+    {
+        extraScene = SceneManager.CreateScene("Scene", new CreateSceneParameters(LocalPhysicsMode.Physics3D));
+
+        PopulateExtraSceneWithObjects();
+
+        physicsScene = extraScene.GetPhysicsScene();
+    }
+
+    public void PopulateExtraSceneWithObjects()
+    {
+        physicsSceneCarList = new CarController[4];
+        for (int i = 0; i < 4; i++)
+        {
+            NetworkPlayer player = players[i];
+            if (player != null && player.ID >= 0 && player.ID < 4)
+            {
+                CarController car = player.GetCarController;
+
+                if (car != null)
+                {
+                    physicsSceneCarList[i] = Instantiate(car);
+                    SceneManager.MoveGameObjectToScene(physicsSceneCarList[i].gameObject, extraScene);
+                }
+            }
+        }
+
+        GameObject newEnvBoud = Instantiate(envBound);
+        SceneManager.MoveGameObjectToScene(newEnvBoud, extraScene);
+    }
+
+
 
     #endregion
 }
