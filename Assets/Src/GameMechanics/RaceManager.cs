@@ -371,10 +371,14 @@ public class RaceManager : MonoBehaviour
 
     #region Server Rewind
 
-    [SerializeField] int bufferSize = 10000;
+    [SerializeField] int bufferSize = 4000;
+    [SerializeField] float rewindCooldownTime = 1;
     private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
     private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
     int serverTick = 1;
+    float rewindCooldownCounter = 0;
+    List<int> rewindTickQueue = new();
+    List<int> collideTickQueue = new();
 
     bool isRewinding = false;
 
@@ -403,6 +407,8 @@ public class RaceManager : MonoBehaviour
         InputPayload[] inputBuffer = inputBufferDict[tick];
 
         inputBuffer[id] = input;
+
+        if (Mathf.Abs(serverTick - tick) < bufferSize / 5f && input.isCollide) collideTickQueue.Add(tick);
     }
 
     public void PendState(int id, StatePayload state)
@@ -433,9 +439,49 @@ public class RaceManager : MonoBehaviour
 
         stateBuffer[id] = state;
 
-        if (canRewind)
+        if (Mathf.Abs(serverTick - tick) < bufferSize / 20f && canRewind) 
         {
-            RewindServerNoPhysicsScene(tick);
+            rewindTickQueue.Add(tick);
+
+            if (rewindTickQueue.Count > bufferSize)
+            {
+                rewindTickQueue.RemoveAt(0);
+            }
+        }
+    }
+
+    void LateUpdate()
+    {
+        int rewindTick = -1;
+
+        while (rewindTick == -1 && collideTickQueue.Count > 0)
+        {
+            int tick = collideTickQueue[0];
+            collideTickQueue.RemoveAt(0);
+
+            if (Mathf.Abs(serverTick - tick) < bufferSize / 5f)
+            {
+                rewindTick = tick;
+            }
+        }
+
+        while (rewindTick == -1 && rewindTickQueue.Count > 0)
+        {
+            int tick = rewindTickQueue[0];
+            rewindTickQueue.RemoveAt(0);
+
+            if (Mathf.Abs(serverTick - tick) < bufferSize / 20f)
+            {
+                rewindTick = tick;
+            }
+        }
+
+        rewindCooldownCounter += Time.deltaTime;
+
+        if (rewindTick >= 0 && rewindCooldownCounter >= rewindCooldownTime)
+        {
+            RewindServerNoPhysicsScene(rewindTick);
+            rewindCooldownCounter = 0;
         }
     }
 
