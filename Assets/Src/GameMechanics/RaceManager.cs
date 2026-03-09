@@ -372,7 +372,7 @@ public class RaceManager : MonoBehaviour
     #region Server Rewind
 
     [SerializeField] int bufferSize = 4000;
-    [SerializeField] float rewindCooldownTime = 1;
+    float rewindCooldownTime = 1f;
     private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
     private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
     int serverTick = 1;
@@ -384,7 +384,7 @@ public class RaceManager : MonoBehaviour
 
     void FixedUpdate()
     {
-        if (GameManager.Instance.State == GameState.Started) serverTick++;
+        serverTick = NetworkManager.Singleton.ServerTime.Tick;
     }
 
     public void PendInput(int id, InputPayload input)
@@ -399,7 +399,7 @@ public class RaceManager : MonoBehaviour
             else inputBufferDict.Remove(inputBufferDict.Keys.First());
         }
 
-        if (!inputBufferDict.ContainsKey(tick)) 
+        if (!inputBufferDict.ContainsKey(tick))
         {
             inputBufferDict.Add(tick, new InputPayload[4]);
         }
@@ -430,7 +430,7 @@ public class RaceManager : MonoBehaviour
             canRewind = true;
         }
 
-        if (!stateBufferDict.ContainsKey(tick)) 
+        if (!stateBufferDict.ContainsKey(tick))
         {
             stateBufferDict.Add(tick, new StatePayload[4]);
         }
@@ -439,7 +439,7 @@ public class RaceManager : MonoBehaviour
 
         stateBuffer[id] = state;
 
-        if (Mathf.Abs(serverTick - tick) < bufferSize / 20f && canRewind) 
+        if (Mathf.Abs(serverTick - tick) < bufferSize / 20f && canRewind)
         {
             rewindTickQueue.Add(tick);
 
@@ -452,195 +452,96 @@ public class RaceManager : MonoBehaviour
 
     void LateUpdate()
     {
-        int rewindTick = -1;
-
-        while (rewindTick == -1 && collideTickQueue.Count > 0)
-        {
-            int tick = collideTickQueue[0];
-            collideTickQueue.RemoveAt(0);
-
-            if (Mathf.Abs(serverTick - tick) < bufferSize / 5f)
-            {
-                rewindTick = tick;
-            }
-        }
-
-        while (rewindTick == -1 && rewindTickQueue.Count > 0)
-        {
-            int tick = rewindTickQueue[0];
-            rewindTickQueue.RemoveAt(0);
-
-            if (Mathf.Abs(serverTick - tick) < bufferSize / 20f)
-            {
-                rewindTick = tick;
-            }
-        }
-
         rewindCooldownCounter += Time.deltaTime;
-
-        if (rewindTick >= 0 && rewindCooldownCounter >= rewindCooldownTime)
+        if (rewindCooldownCounter >= rewindCooldownTime)
         {
-            RewindServerNoPhysicsScene(rewindTick);
-            rewindCooldownCounter = 0;
+            int rewindTick = -1;
+
+            while (rewindTick == -1 && collideTickQueue.Count > 0)
+            {
+                int tick = collideTickQueue[0];
+                collideTickQueue.RemoveAt(0);
+
+                if (Mathf.Abs(serverTick - tick) < bufferSize / 5f)
+                {
+                    rewindTick = tick;
+                }
+            }
+
+            while (rewindTick == -1 && rewindTickQueue.Count > 0)
+            {
+                int tick = rewindTickQueue[0];
+                rewindTickQueue.RemoveAt(0);
+
+                if (Mathf.Abs(serverTick - tick) < bufferSize / 20f)
+                {
+                    rewindTick = tick;
+                }
+            }
+
+            if (rewindTick >= 0)
+            {
+                //RewindServerSafe(rewindTick);
+                rewindCooldownCounter = 0;
+            }
         }
+    }
+
+    private void RewindServerSafe(int tick)
+    {
+        // prefer physics scene-based rewind
+        if (physicsScene == null || physicsSceneCarList == null)
+        {
+            InitScene();
+        }
+
+        RewindServer(tick);
     }
 
     private void RewindServer(int tick)
     {
         if (!isRewinding && inputBufferDict.ContainsKey(tick))
         {
-            //Physics.simulationMode = SimulationMode.Script;
             isRewinding = true;
-            //apply first car state
+
+            // apply first car state snapshot
             StatePayload[] firstState = stateBufferDict[tick];
-
-            // CarController[] carList = new CarController[4];
-
-            // foreach (var player in players)
-            // {
-            //     if (player != null && player.ID >= 0 && player.ID < 4)
-            //     {
-            //         CarController car = player.GetCarController;
-
-            //         if (car != null && firstState[player.ID].tick != 0)
-            //         {
-            //             car.ApplyState(firstState[player.ID]);
-            //             carList[player.ID] = car;
-            //         }
-            //     }
-            // }
 
             if (physicsScene == null || physicsSceneCarList == null) InitScene();
-            else
+
+            // apply states to physicsSceneCarList
+            for (int i = 0; i < 4; i++)
             {
-                for (int i = 0; i < 4; i++)
+                CarController car = physicsSceneCarList[i];
+
+                if (car != null && firstState[i].tick != 0)
                 {
-                    CarController car = physicsSceneCarList[i];
-
-                    if (car != null && firstState[i].tick != 0)
-                    {
-                        car.ApplyState(firstState[i]);
-                    }
-                }
-
-                //simulate first tick physics
-                //Physics.Simulate(Time.fixedDeltaTime);
-
-                //rewind til present
-                int tickToProcess = tick + 1;
-                int lastTick = inputBufferDict.Keys.Last();
-
-                while (tickToProcess <= lastTick)
-                {
-                    foreach (var car in physicsSceneCarList)
-                    {
-                        if (car != null)
-                        {
-                            // Debug.Log(
-                            //     "stateBufferDict: " + stateBufferDict +
-                            //     " car: " + car +
-                            //     " car.ID" + car.ID
-                            // );
-
-
-                            if (
-                                inputBufferDict.ContainsKey(tickToProcess) 
-                                && inputBufferDict[tickToProcess][car.ID].tick != 0)
-                            {
-                                car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
-                            }
-                        }
-                        
-                    }
-
-                    //Physics.Simulate(Time.fixedDeltaTime);
-                    physicsScene.Simulate(Time.fixedDeltaTime);
-
-                    foreach (var car in physicsSceneCarList)
-                    {
-                        if (car != null) stateBufferDict[tickToProcess][car.ID] = car.GetStateOfCar();
-                    }
-
-                    tickToProcess++;
-                }
-
-                for (int i = 0; i < 4; i++)
-                {
-                    CarController carReal = players[i].GetCarController;
-                    CarController carFake = physicsSceneCarList[i];
-
-                    if (carReal != null && carFake != null)
-                    {
-                        carReal.ApplyState(carFake.GetStateOfCar());
-                    }
-                }
-
-                //Debug.Log("Server Rewinded");
-                // Physics.simulationMode = SimulationMode.FixedUpdate;
-            }
-            
-            isRewinding = false;
-        }
-    }
-
-    private void RewindServerNoPhysicsScene(int tick)
-    {
-        if (!isRewinding && inputBufferDict.ContainsKey(tick))
-        {
-            Physics.simulationMode = SimulationMode.Script;
-            isRewinding = true;
-            //apply first car state
-            StatePayload[] firstState = stateBufferDict[tick];
-
-            CarController[] carList = new CarController[4];
-
-            foreach (var player in players)
-            {
-                if (player != null && player.ID >= 0 && player.ID < 4)
-                {
-                    CarController car = player.GetCarController;
-
-                    if (car != null && firstState[player.ID].tick != 0)
-                    {
-                        car.ApplyState(firstState[player.ID]);
-                        carList[player.ID] = car;
-                    }
+                    car.ApplyState(firstState[i]);
                 }
             }
 
-            //simulate first tick physics
-            Physics.Simulate(Time.fixedDeltaTime);
-
-            //rewind til present
+            // simulate from tick+1 to lastTick
             int tickToProcess = tick + 1;
             int lastTick = inputBufferDict.Keys.Last();
 
             while (tickToProcess <= lastTick)
             {
-                foreach (var car in carList)
+                foreach (var car in physicsSceneCarList)
                 {
                     if (car != null)
                     {
-                        // Debug.Log(
-                        //     "stateBufferDict: " + stateBufferDict +
-                        //     " car: " + car +
-                        //     " car.ID" + car.ID
-                        // );
-
-
-                        if (
-                            inputBufferDict.ContainsKey(tickToProcess) 
+                        if (inputBufferDict.ContainsKey(tickToProcess) 
                             && inputBufferDict[tickToProcess][car.ID].tick != 0)
                         {
                             car.ProcessMovement(inputBufferDict[tickToProcess][car.ID]);
                         }
                     }
-                    
                 }
 
-                Physics.Simulate(Time.fixedDeltaTime);
+                // simulate on isolated physics scene
+                physicsScene.Simulate(Time.fixedDeltaTime);
 
-                foreach (var car in carList)
+                foreach (var car in physicsSceneCarList)
                 {
                     if (car != null) stateBufferDict[tickToProcess][car.ID] = car.GetStateOfCar();
                 }
@@ -648,11 +549,27 @@ public class RaceManager : MonoBehaviour
                 tickToProcess++;
             }
 
-                //Debug.Log("Server Rewinded");
-            Physics.simulationMode = SimulationMode.FixedUpdate;
-            
+            // apply results back to real cars
+            for (int i = 0; i < players.Count; i++)
+            {
+                CarController carReal = players[i].GetCarController;
+                CarController carFake = physicsSceneCarList[i];
+
+                if (carReal != null && carFake != null)
+                {
+                    carReal.ApplyState(carFake.GetStateOfCar());
+                }
+            }
+
             isRewinding = false;
         }
+    }
+
+    // NOTE: removed usage of global Physics.Simulate() on main scene; always use physicsScene path.
+    private void RewindServerNoPhysicsScene(int tick)
+    {
+        // keep for compatibility but internally call safe physicsScene approach
+        RewindServerSafe(tick);
     }
 
     #endregion
@@ -665,8 +582,7 @@ public class RaceManager : MonoBehaviour
 
     public void InitScene()
     {
-        extraScene = SceneManager.CreateScene("Scene", new CreateSceneParameters(LocalPhysicsMode.Physics3D));
-
+        extraScene = SceneManager.CreateScene("Scene_Rewind", new CreateSceneParameters(LocalPhysicsMode.Physics3D));
         PopulateExtraSceneWithObjects();
 
         physicsScene = extraScene.GetPhysicsScene();
@@ -675,7 +591,7 @@ public class RaceManager : MonoBehaviour
     public void PopulateExtraSceneWithObjects()
     {
         physicsSceneCarList = new CarController[4];
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < players.Count; i++)
         {
             NetworkPlayer player = players[i];
             if (player != null && player.ID >= 0 && player.ID < 4)
@@ -684,17 +600,40 @@ public class RaceManager : MonoBehaviour
 
                 if (car != null)
                 {
-                    physicsSceneCarList[i] = Instantiate(car);
-                    SceneManager.MoveGameObjectToScene(physicsSceneCarList[i].gameObject, extraScene);
+                    // instantiate a clean clone of the car's GameObject
+                    GameObject cloneObj = Instantiate(car.gameObject);
+                    // remove/disable NetworkObject and NetworkBehaviour components to avoid double-network registration and side effects
+                    var netObj = cloneObj.GetComponent<NetworkObject>();
+                    if (netObj != null) Destroy(netObj);
+
+                    var networkBehaviours = cloneObj.GetComponents<NetworkBehaviour>();
+                    foreach (var nb in networkBehaviours)
+                    {
+                        Destroy(nb);
+                    }
+
+                    // move clone to physics scene
+                    SceneManager.MoveGameObjectToScene(cloneObj, extraScene);
+
+                    var cloneCar = cloneObj.GetComponent<CarController>();
+                    // ensure clone rigidbody is present and kinematic false for simulation
+                    if (cloneCar != null)
+                    {
+                        cloneCar.enabled = true;
+                        var rb = cloneCar.GetComponent<Rigidbody>();
+                        if (rb != null) rb.isKinematic = false;
+                        physicsSceneCarList[i] = cloneCar;
+                    }
                 }
             }
         }
 
-        GameObject newEnvBoud = Instantiate(envBound);
-        SceneManager.MoveGameObjectToScene(newEnvBoud, extraScene);
+        if (envBound != null)
+        {
+            GameObject newEnvBound = Instantiate(envBound);
+            SceneManager.MoveGameObjectToScene(newEnvBound, extraScene);
+        }
     }
-
-
 
     #endregion
 }
