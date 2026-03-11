@@ -387,7 +387,6 @@ public class RaceManager : MonoBehaviour
 
         bool canRewind = stateBufferDict.Count > 0;
 
-        // Lấy mẫu state để đồng bộ định kỳ
         if (Mathf.Abs(serverTick - tick) <= 100 && canRewind)
         {
             rewindTickQueue.Add(tick);
@@ -409,7 +408,6 @@ public class RaceManager : MonoBehaviour
             int rewindTick = -1;
             string triggerReason = "";
 
-            // CHỈ chạy Rewind do Va chạm
             while (rewindTick == -1 && collideTickQueue.Count > 0)
             {
                 int tick = collideTickQueue[0];
@@ -422,7 +420,7 @@ public class RaceManager : MonoBehaviour
                 }
             }
 
-            // XÓA BỎ HOÀN TOÀN ĐOẠN "Đồng bộ định kỳ" Ở ĐÂY
+            //process rewindTickQueue
 
             if (rewindTick >= 0)
             {
@@ -435,7 +433,6 @@ public class RaceManager : MonoBehaviour
         }
     }
 
-    // --- HÀM REWIND SỬ DỤNG TRỰC TIẾP SCENE CHÍNH ---
     private void RewindServerSingleScene(int tick)
     {
         if (!isRewinding && inputBufferDict.ContainsKey(tick) && stateBufferDict.ContainsKey(tick))
@@ -444,12 +441,10 @@ public class RaceManager : MonoBehaviour
 
             StatePayload[] firstState = stateBufferDict[tick];
 
-            // Tạm dừng dòng thời gian tự động của Engine Vật lý
             Physics.simulationMode = SimulationMode.Script;
 
             try
             {
-                // 1. Kéo tất cả các xe THẬT về lại vị trí trong quá khứ
                 for (int i = 0; i < players.Count; i++)
                 {
                     CarController carReal = players[i].GetCarController;
@@ -461,7 +456,6 @@ public class RaceManager : MonoBehaviour
                         
                         var rb = carReal.GetComponent<Rigidbody>();
                         
-                        // Gán thẳng vào cả Transform và Rigidbody
                         rb.transform.position = firstState[id].position;
                         rb.transform.rotation = firstState[id].rotation;
                         rb.position = firstState[id].position;
@@ -470,10 +464,8 @@ public class RaceManager : MonoBehaviour
                     }
                 }
 
-                // [RẤT QUAN TRỌNG] Ép Unity cập nhật lại lưới va chạm của các xe ở vị trí mới ngay lập tức
                 Physics.SyncTransforms();
 
-                // 2. Chạy lại mô phỏng từ tick+1 đến thời điểm HIỆN TẠI (serverTick)
                 int tickToProcess = tick + 1;
                 int lastTick = serverTick;
                 int simulatedFrames = 0;
@@ -481,7 +473,6 @@ public class RaceManager : MonoBehaviour
                 if (ENABLE_DEBUG_LOG) 
                     Debug.Log($"<color=cyan>[Lag Compensation]</color> Bắt đầu Fast-Forward (Resimulate) từ Tick {tickToProcess} đến {lastTick}...");
 
-                // Lấy bộ đệm Input phòng hờ nếu Client bị rớt mạng ở một vài Tick
                 InputPayload[] lastInputs = new InputPayload[4];
                 for (int id = 0; id < 4; id++) 
                 {
@@ -493,7 +484,6 @@ public class RaceManager : MonoBehaviour
 
                 while (tickToProcess <= lastTick)
                 {
-                    // Lặp qua tất cả các xe thật để nạp Input
                     for (int i = 0; i < players.Count; i++)
                     {
                         CarController carReal = players[i].GetCarController;
@@ -510,16 +500,13 @@ public class RaceManager : MonoBehaviour
                                 lastInputs[id].tick = tickToProcess;
                             }
 
-                            // Gọi logic vật lý di chuyển của xe thật
                             StatePayload newState = carReal.ProcessMovement(lastInputs[id]);
                             carReal.ApplyState(newState);
                         }
                     }
 
-                    // Tự tay tua nhanh Vật Lý của toàn bộ thế giới thêm 1 frame
                     Physics.Simulate(Time.fixedDeltaTime);
 
-                    // Ghi đè lại State mới sau khi va chạm vào Buffer
                     if (!stateBufferDict.ContainsKey(tickToProcess))
                     {
                         stateBufferDict.Add(tickToProcess, new StatePayload[4]);
@@ -540,13 +527,11 @@ public class RaceManager : MonoBehaviour
                 if (ENABLE_DEBUG_LOG) 
                     Debug.Log($"<color=green>[Lag Compensation]</color> Rewind hoàn tất! Đã chạy lại {simulatedFrames} frames mượt mà.");
 
-                // Dọn dẹp bộ nhớ hàng đợi sau khi Rewind xong
                 collideTickQueue.Clear();
                 rewindTickQueue.Clear();
             }
             finally
             {
-                // [TỐI QUAN TRỌNG] Trả lại quyền mô phỏng vật lý cho Unity dù có lỗi hay không
                 Physics.simulationMode = SimulationMode.FixedUpdate;
                 isRewinding = false;
             }

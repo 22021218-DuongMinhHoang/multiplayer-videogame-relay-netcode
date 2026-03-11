@@ -549,40 +549,33 @@ public class CarController : NetworkBehaviour
             SubmitInputServerRpc(inputPayload);
         }
 
-        // --- CƠ CHẾ CỦA SERVER (XỬ LÝ QUEUE) ---
         if (IsServer && !_rigidbody.isKinematic)
         {
             bool hasProcessed = false;
 
-            // Xử lý tất cả các Input Client gửi đến trong hàng đợi
             while (pendingInputs.Count > 0)
             {
                 int nextTick = pendingInputs.Keys.First();
                 
-                // Khởi tạo mốc lần đầu nhận input
                 if (lastProcessedTick == 0)
                 {
                     lastProcessedTick = nextTick - 1; 
                 }
 
-                // Xóa bỏ các gói tin đến trễ hoặc out-of-order
                 if (nextTick <= lastProcessedTick)
                 {
                     pendingInputs.Remove(nextTick);
                     continue;
                 }
 
-                // Bù đắp nếu bị rớt gói tin (Packet Loss) giữa chừng
                 if (nextTick > lastProcessedTick + 1)
                 {
-                    // Nếu rớt mạng quá lâu (> 30 ticks ~ 0.6s), bỏ qua việc bù để không làm sập server
                     if (nextTick - lastProcessedTick > 30)
                     {
                         lastProcessedTick = nextTick - 1;
                         continue;
                     }
 
-                    // Tái sử dụng input cuối cùng để xe không bị thắng gấp
                     InputPayload fallbackInput = lastKnownInput;
                     fallbackInput.tick = lastProcessedTick + 1; 
 
@@ -593,11 +586,9 @@ public class CarController : NetworkBehaviour
                     lastProcessedTick = fallbackInput.tick;
                     hasProcessed = true;
                     
-                    // Lặp lại vòng lặp để tiếp tục lấp đầy các khoảng trống tới khi bằng nextTick
                     continue;
                 }
 
-                // Xử lý gói tin thực sự của Client gửi lên
                 InputPayload inputForThisTick = pendingInputs[nextTick];
                 pendingInputs.Remove(nextTick);
                 lastKnownInput = inputForThisTick;
@@ -610,7 +601,6 @@ public class CarController : NetworkBehaviour
                 hasProcessed = true;
             }
 
-            // Gửi dữ liệu về cho Client sau khi đã xử lý xong TẤT CẢ các Frame bị dồn
             if (hasProcessed)
             {
                 ServerSendState();
