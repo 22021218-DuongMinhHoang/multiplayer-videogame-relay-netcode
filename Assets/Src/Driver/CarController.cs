@@ -188,7 +188,7 @@ public class CarController : NetworkBehaviour
     [SerializeField] private CorrectionMode currentCorrectionMode = CorrectionMode.SmoothDamp;
 
     [Header("Client Side Prediction and Server Reconcilation")]
-    private int currentTick = 0; // Thay đổi: Khởi tạo ở 0 và tự đếm tăng dần
+    private int currentTick = 0; 
     private const int BUFFER_SIZE = 4096;
 
     private StatePayload[] stateBuffer;
@@ -384,12 +384,11 @@ public class CarController : NetworkBehaviour
                 }
                 SetPlayerTag(-1, NetworkPlayer.Name); OnRocketChange(NetworkPlayer.Rockets); SetMainMeshMaterialColor(NetworkPlayer.CarColor); EventManager.Instance.RaisePlayersCarFound(ID);
             }
-        if (NetworkPlayer == null) throw new Exception("Player not found!");
-
+        
         _networkData.OnValueChanged += OnNetworkDataChanged;
         ResetSplineState(transform.position);
 
-        if (IsOwner) NetworkPlayer.StartPos = NetworkPlayer.ID;
+        if (IsOwner && NetworkPlayer != null) NetworkPlayer.StartPos = NetworkPlayer.ID;
     }
 
     private void OnBotToggleChanged(bool isOn)
@@ -399,7 +398,7 @@ public class CarController : NetworkBehaviour
         else
         {
             inputSteering = 0; inputAcceleration = 0; inputBrake = 0;
-            SubmitBotInputServerRpc(0, 0, 0);
+            //SubmitBotInputServerRpc(0, 0, 0);
         }
     }
 
@@ -469,44 +468,9 @@ public class CarController : NetworkBehaviour
         latestServerState.position = newVal.Position;
         latestServerState.rotation = Quaternion.Euler(newVal.Rotation);
         latestServerState.speed = newVal.Speed;
-
-        // XÓA PHẦN GHI ĐÈ stateBuffer[idx] Ở ĐÂY!
-        // Client chỉ được lưu kết quả TỰ DỰ ĐOÁN của mình vào stateBuffer, không lấy từ Server.
     }
 
     private float CalculateStdDev(List<float> values) { if (values.Count <= 1) return 0; float avg = 0; foreach(var v in values) avg += v; avg /= values.Count; float sumSq = 0; foreach(var v in values) sumSq += (v - avg) * (v - avg); return Mathf.Sqrt(sumSq / (values.Count - 1)); }
-
-    private void AutoDrive()
-    {
-        if (waypoints == null || waypoints.Count == 0) return;
-
-        Transform targetWaypoint = waypoints[currentWaypointIndex];
-        float distance = Vector3.Distance(transform.position, targetWaypoint.position);
-
-        if (distance < waypointThreshold) {
-            currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
-        }
-
-        Vector3 relativeVector = transform.InverseTransformPoint(targetWaypoint.position);
-        float perfectSteer = (relativeVector.x / relativeVector.magnitude);
-
-        float noise = (Mathf.PerlinNoise(Time.time * 2.0f, 0) - 0.5f) * 0.2f;
-        inputSteering = Mathf.Lerp(inputSteering, perfectSteer + noise, Time.fixedDeltaTime * 5f);
-
-        float throttleNoise = 1.0f;
-        if (Time.time % 2.0f > 1.8f) throttleNoise = 0.5f;
-        inputAcceleration = 1f * throttleNoise;
-        if (Mathf.Abs(inputSteering) > 0.5f) inputAcceleration *= 0.5f;
-        inputBrake = 0f;
-    }
-
-    [Rpc(SendTo.Server)]
-    private void SubmitBotInputServerRpc(float steer, float accel, float brake)
-    {
-        this.inputSteering = steer;
-        this.inputAcceleration = accel;
-        this.inputBrake = brake;
-    }
 
     public void TeleportToStart()
     {
@@ -538,27 +502,36 @@ public class CarController : NetworkBehaviour
 
         if (IsClient && IsOwner && !_rigidbody.isKinematic)
         {
-            // Tự đếm Tick cục bộ trên Client, không phụ thuộc vào độ trễ của NetworkManager.LocalTime.Tick
-            currentTick++;
+            if (currentTick == 0 && NetworkManager.Singleton != null) 
+            {
+                currentTick = NetworkManager.Singleton.ServerTime.Tick;
+            }
+            else 
+            {
+                currentTick++;
+            }
 
-            // 1. CHẠY SERVER RECONCILIATION ĐẦU TIÊN để luôn đảm bảo xuất phát từ trạng thái chuẩn xác nhất
             HandleServerReconciliation();
 
-            // 2. DỰ ĐOÁN VÀ GỬI INPUT CHO TICK HIỆN TẠI
             InputPayload inputPayload = new InputPayload();
             inputPayload.tick = currentTick;
             inputPayload.inputAcceleration = inputAcceleration;
             inputPayload.inputBrake = inputBrake;
             inputPayload.inputSteering = inputSteering;
 
-            RaycastHit[] hits = Physics.RaycastAll(_rigidbody.position, transform.forward);
+            Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
+            RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
+            
             inputPayload.isCollide = false;
             foreach (var hit in hits)
             {
-                if (!hit.collider.isTrigger)
+                if (!hit.collider.isTrigger && hit.collider.transform.root.gameObject != this.gameObject)
                 {
-                    inputPayload.isCollide = true;
-                    break;
+                    if (Vector3.Dot(hit.normal, Vector3.up) < 0.8f)
+                    {
+                        inputPayload.isCollide = true;
+                        break;
+                    }
                 }
             }
 
@@ -576,32 +549,70 @@ public class CarController : NetworkBehaviour
             SubmitInputServerRpc(inputPayload);
         }
 
-        // --- CƠ CHẾ CỦA SERVER ---
+        // --- CƠ CHẾ CỦA SERVER (XỬ LÝ QUEUE) ---
         if (IsServer && !_rigidbody.isKinematic)
         {
-            // Server xử lý dữ liệu dựa trên hàng đợi input được gửi từ Client lên, 
-            // đảm bảo luôn mô phỏng chính xác tick mà Client gửi (Bỏ qua delay cứng của ServerTime)
-            if (pendingInputs.Count > 0)
+            bool hasProcessed = false;
+
+            // Xử lý tất cả các Input Client gửi đến trong hàng đợi
+            while (pendingInputs.Count > 0)
             {
-                int tickToProcess = pendingInputs.Keys.First();
-                InputPayload inputForThisTick = pendingInputs[tickToProcess];
-                pendingInputs.Remove(tickToProcess);
+                int nextTick = pendingInputs.Keys.First();
+                
+                // Khởi tạo mốc lần đầu nhận input
+                if (lastProcessedTick == 0)
+                {
+                    lastProcessedTick = nextTick - 1; 
+                }
+
+                // Xóa bỏ các gói tin đến trễ hoặc out-of-order
+                if (nextTick <= lastProcessedTick)
+                {
+                    pendingInputs.Remove(nextTick);
+                    continue;
+                }
+
+                // Bù đắp nếu bị rớt gói tin (Packet Loss) giữa chừng
+                if (nextTick > lastProcessedTick + 1)
+                {
+                    // Nếu rớt mạng quá lâu (> 30 ticks ~ 0.6s), bỏ qua việc bù để không làm sập server
+                    if (nextTick - lastProcessedTick > 30)
+                    {
+                        lastProcessedTick = nextTick - 1;
+                        continue;
+                    }
+
+                    // Tái sử dụng input cuối cùng để xe không bị thắng gấp
+                    InputPayload fallbackInput = lastKnownInput;
+                    fallbackInput.tick = lastProcessedTick + 1; 
+
+                    RaceManager.Instance.PendInput(ID, fallbackInput);
+                    StatePayload processedState = ProcessMovement(fallbackInput);
+                    RaceManager.Instance.PendState(ID, processedState);
+
+                    lastProcessedTick = fallbackInput.tick;
+                    hasProcessed = true;
+                    
+                    // Lặp lại vòng lặp để tiếp tục lấp đầy các khoảng trống tới khi bằng nextTick
+                    continue;
+                }
+
+                // Xử lý gói tin thực sự của Client gửi lên
+                InputPayload inputForThisTick = pendingInputs[nextTick];
+                pendingInputs.Remove(nextTick);
                 lastKnownInput = inputForThisTick;
 
-                StatePayload processedState = ProcessMovement(inputForThisTick);
-                RaceManager.Instance.PendState(ID, processedState);
+                RaceManager.Instance.PendInput(ID, inputForThisTick);
+                StatePayload actualState = ProcessMovement(inputForThisTick);
+                RaceManager.Instance.PendState(ID, actualState);
 
-                lastProcessedTick = tickToProcess;
-                ServerSendState();
+                lastProcessedTick = nextTick;
+                hasProcessed = true;
             }
-            else if (lastProcessedTick > 0) // Tránh chạy khi chưa bắt đầu
-            {
-                // Fallback nếu thiếu input (Client giật lag hoặc rớt gói tin)
-                InputPayload inputForThisTick = lastKnownInput;
-                inputForThisTick.tick = lastProcessedTick + 1; // Nội suy tiếp từ tick gần nhất
 
-                StatePayload processedState = ProcessMovement(inputForThisTick);
-                lastProcessedTick = inputForThisTick.tick;
+            // Gửi dữ liệu về cho Client sau khi đã xử lý xong TẤT CẢ các Frame bị dồn
+            if (hasProcessed)
+            {
                 ServerSendState();
             }
         }
@@ -671,7 +682,7 @@ public class CarController : NetworkBehaviour
                 Velocity = currentVel,
                 Acceleration = accel,
                 Timestamp = Time.time,
-                Tick = lastProcessedTick, // Gửi về chính xác Tick mà Server vừa xử lý
+                Tick = lastProcessedTick, 
                 Speed = currentSpeed
             };
 
@@ -749,7 +760,7 @@ public class CarController : NetworkBehaviour
         }
 
         float rubberMultiplier = 1f;
-        if (IsServer && RubberBand && NetworkPlayer != null)
+        if (RubberBand && NetworkPlayer != null)
         {
             rubberMultiplier = NetworkPlayer.RubberBandCoefficient;
         }
@@ -789,8 +800,8 @@ public class CarController : NetworkBehaviour
 
         if (IsServer)
         {
-            _rigidbody.MoveRotation(result.rotation);
-            _rigidbody.MovePosition(result.position);
+            _rigidbody.position = result.position;
+            _rigidbody.rotation = result.rotation;
             currentSpeed = result.speed;
         }
 
@@ -807,32 +818,27 @@ public class CarController : NetworkBehaviour
         int serverStateBufferIndex = BufIdx(latestServerState.tick);
         StatePayload predictedPastState = stateBuffer[serverStateBufferIndex];
 
-        // So khớp lại Tick trong Buffer để chắc chắn không lấy sai dữ liệu
         if (predictedPastState.tick != latestServerState.tick) 
         {
-            if (ENABLE_DEBUG_LOG) Debug.LogWarning($"[Reconcile] Bỏ qua vì dữ liệu Tick không khớp! Mong đợi: {latestServerState.tick}, Thực tế: {predictedPastState.tick}");
             return; 
         }
 
         float positionError = Vector3.Distance(latestServerState.position, predictedPastState.position);
         float rotationError = Quaternion.Angle(latestServerState.rotation, predictedPastState.rotation);
 
-        // Ngưỡng sửa lỗi
-        const float RECONCILE_POS_THRESHOLD = 0.1f;
-        const float RECONCILE_ROT_THRESHOLD = 1.0f;
+        const float RECONCILE_POS_THRESHOLD = 1.5f;
+        const float RECONCILE_ROT_THRESHOLD = 5.0f;
 
         if ((positionError > RECONCILE_POS_THRESHOLD || rotationError > RECONCILE_ROT_THRESHOLD) && !isRewinding)
         {
             isRewinding = true;
 
-            // 1. Dùng Trạng thái Server làm điểm bắt đầu mới
             Vector3 rewindPos = latestServerState.position;
             Quaternion rewindRot = latestServerState.rotation;
             float rewindSpeed = latestServerState.speed;
 
             float tickDt = Time.fixedDeltaTime;
 
-            // 2. Tái mô phỏng lại các input từ Tick của Server lên Tick hiện tại
             for (int tickToProcess = latestServerState.tick + 1; tickToProcess <= currentTick; tickToProcess++)
             {
                 int bufferIndex = BufIdx(tickToProcess);
@@ -850,18 +856,16 @@ public class CarController : NetworkBehaviour
                 rewindRot = stepState.rotation;
                 rewindSpeed = stepState.speed;
 
-                // Ghi đè trạng thái đã sửa đổi vào lại buffer
                 stateBuffer[bufferIndex] = stepState;
             }
 
-            // 3. Snap lại trên Rigidbody bằng kết quả Re-simulation
             _rigidbody.MovePosition(rewindPos);
             _rigidbody.MoveRotation(rewindRot);
             _rigidbody.velocity = rewindRot * Vector3.forward * rewindSpeed;
             currentSpeed = rewindSpeed;
 
             if (ENABLE_DEBUG_LOG) 
-                Debug.Log($"[Reconcile] Đã sửa lỗi! Sai số Vị trí: {positionError:F3}, Sai số Góc xoay: {rotationError:F3}. Đã re-simulate từ tick {latestServerState.tick} đến {currentTick}");
+                Debug.Log($"[Reconcile] Đã sửa lỗi! Sai số Vị trí: {positionError:F3} | Góc: {rotationError:F3}. Đã re-simulate từ tick {latestServerState.tick} đến {currentTick}");
 
             isRewinding = false;
         }
@@ -872,17 +876,14 @@ public class CarController : NetworkBehaviour
     {
         if (!IsServer) return;
 
-        // Chỉ cho phép input nằm trong khoảng an toàn so với tick cuối cùng server nhận được
         if (lastProcessedTick > 0 && (input.tick < lastProcessedTick - BUFFER_SIZE || input.tick > lastProcessedTick + 600))
         {
-            if (ENABLE_DEBUG_LOG) Debug.LogWarning($"[Server][RPC] Xóa bỏ input out-of-range: tick={input.tick} lastProcessed={lastProcessedTick}");
             return;
         }
 
         if (!pendingInputs.ContainsKey(input.tick))
         {
             pendingInputs.Add(input.tick, input);
-            // Giới hạn kích thước hàng đợi
             if (pendingInputs.Count > 5000) pendingInputs.Remove(pendingInputs.Keys.First());
         }
         else
