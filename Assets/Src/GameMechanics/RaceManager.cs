@@ -339,15 +339,6 @@ public class RaceManager : MonoBehaviour
 
     bool isRewinding = false;
 
-    void FixedUpdate()
-    {
-        // Đồng bộ thời gian chuẩn từ Server
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
-        {
-            serverTick = NetworkManager.Singleton.ServerTime.Tick;
-        }
-    }
-
     public void PendInput(int id, InputPayload input)
     {
         if (id < 0 || id >= 4) return;
@@ -364,9 +355,11 @@ public class RaceManager : MonoBehaviour
 
         inputBufferDict[tick][id] = input;
 
-        // Chỉ đưa vào hàng đợi nếu Tick không quá cũ (< 100 ticks) để chống Teleport
-        if (Mathf.Abs(serverTick - tick) <= 100 && input.isCollide) 
+        if (Mathf.Abs(serverTick - tick) <= 100 && input.isCollide)
+        {
             collideTickQueue.Add(tick);
+        }
+            
     }
 
     public void PendState(int id, StatePayload state)
@@ -387,7 +380,7 @@ public class RaceManager : MonoBehaviour
 
         bool canRewind = stateBufferDict.Count > 0;
 
-        if (Mathf.Abs(serverTick - tick) <= 100 && canRewind)
+        if (Mathf.Abs(serverTick - tick) <= 50 && canRewind)
         {
             rewindTickQueue.Add(tick);
 
@@ -398,11 +391,30 @@ public class RaceManager : MonoBehaviour
         }
     }
 
-    void LateUpdate()
+    void FixedUpdate()
     {
+        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+        {
+            serverTick = NetworkManager.Singleton.ServerTime.Tick;
+        }
+
+        List<CarController> cars = new();
+
+        foreach (var player in players)
+        {
+            CarController car = player.GetCarController;
+            if (car != null)
+            {
+                car.ProcessFixedCarController();
+                cars.Add(car);
+            }
+        }
+
+        //Server side
         if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
 
-        rewindCooldownCounter += Time.deltaTime;
+        rewindCooldownCounter += Time.fixedDeltaTime;
+
         if (rewindCooldownCounter >= rewindCooldownTime)
         {
             int rewindTick = -1;
@@ -420,6 +432,18 @@ public class RaceManager : MonoBehaviour
                 }
             }
 
+            while (rewindTick == -1 && rewindTickQueue.Count > 0)
+            {
+                int tick = rewindTickQueue[0];
+                rewindTickQueue.RemoveAt(0);
+
+                if (serverTick - tick <= 50 && serverTick - tick >= 0)
+                {
+                    rewindTick = tick;
+                    triggerReason = "Định kì";
+                }
+            }
+
             //process rewindTickQueue
 
             if (rewindTick >= 0)
@@ -430,6 +454,11 @@ public class RaceManager : MonoBehaviour
                 RewindServerSingleScene(rewindTick);
                 rewindCooldownCounter = 0;
             }
+        }
+
+        foreach (var car in cars)
+        {
+            car.ServerSendState();
         }
     }
 

@@ -497,7 +497,8 @@ public class CarController : NetworkBehaviour
         _targetPos = startPos;
     }
 
-    public void FixedUpdate() {
+    public void ProcessFixedCarController()
+    {
         float tickDt = Time.fixedDeltaTime;
 
         if (IsClient && IsOwner && !_rigidbody.isKinematic)
@@ -564,6 +565,7 @@ public class CarController : NetworkBehaviour
 
                 if (nextTick <= lastProcessedTick)
                 {
+                    RaceManager.Instance.PendInput(ID, pendingInputs[nextTick]);
                     pendingInputs.Remove(nextTick);
                     continue;
                 }
@@ -603,7 +605,7 @@ public class CarController : NetworkBehaviour
 
             if (hasProcessed)
             {
-                ServerSendState();
+                
             }
         }
 
@@ -658,6 +660,10 @@ public class CarController : NetworkBehaviour
             CalculateJerk();
         }
     }
+
+    // public void FixedUpdate() {
+        
+    // }
 
     public void ServerSendState()
     {
@@ -817,7 +823,7 @@ public class CarController : NetworkBehaviour
         float rotationError = Quaternion.Angle(latestServerState.rotation, predictedPastState.rotation);
 
         const float RECONCILE_POS_THRESHOLD = 1.5f;
-        const float RECONCILE_ROT_THRESHOLD = 5.0f;
+        const float RECONCILE_ROT_THRESHOLD = 1.0f;
 
         if ((positionError > RECONCILE_POS_THRESHOLD || rotationError > RECONCILE_ROT_THRESHOLD) && !isRewinding)
         {
