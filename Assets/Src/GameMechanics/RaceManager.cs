@@ -393,6 +393,8 @@ public class RaceManager : MonoBehaviour
 
     void FixedUpdate()
     {
+        bool canRewind = false;
+
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
         {
             serverTick = NetworkManager.Singleton.ServerTime.Tick;
@@ -400,68 +402,76 @@ public class RaceManager : MonoBehaviour
 
         List<CarController> cars = new();
 
+        // 1. TÍNH TOÁN CỘNG DỒN CHO FRAME HIỆN TẠI (ARCADE MOVEMENT)
         foreach (var player in players)
         {
             CarController car = player.GetCarController;
             if (car != null)
             {
-                car.ProcessFixedCarController();
+                (bool hasInput, int lastTick) = car.ProcessFixedCarController();
+                if (hasInput)
+                {
+                    canRewind = true;
+                }
                 cars.Add(car);
             }
         }
 
-        //Server side
-        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
+        // Server side
+        if ((NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) && !canRewind) return;
 
-        rewindCooldownCounter += Time.fixedDeltaTime;
+        // 2. KÍCH HOẠT REWIND & FAST-FORWARD (Nếu có va chạm)
+        int rewindTick = -1;
+        string triggerReason = "";
 
-        if (rewindCooldownCounter >= rewindCooldownTime)
+        while (collideTickQueue.Count > 0)
         {
-            int rewindTick = -1;
-            string triggerReason = "";
+            int tick = collideTickQueue[0];
+            collideTickQueue.RemoveAt(0);
 
-            while (rewindTick == -1 && collideTickQueue.Count > 0)
+            // Bắt được Tick cũ nhất có va chạm
+            if (serverTick - tick <= 100 && serverTick - tick >= 0)
             {
-                int tick = collideTickQueue[0];
-                collideTickQueue.RemoveAt(0);
-
-                if (serverTick - tick <= 100 && serverTick - tick >= 0)
-                {
+                if (rewindTick == -1 || tick < rewindTick) {
                     rewindTick = tick;
                     triggerReason = "Va chạm (Collision)";
                 }
             }
-
-            while (rewindTick == -1 && rewindTickQueue.Count > 0)
-            {
-                int tick = rewindTickQueue[0];
-                rewindTickQueue.RemoveAt(0);
-
-                if (serverTick - tick <= 50 && serverTick - tick >= 0)
-                {
-                    rewindTick = tick;
-                    triggerReason = "Định kì";
-                }
-            }
-
-            //process rewindTickQueue
-
-            if (rewindTick >= 0)
-            {
-                if (ENABLE_DEBUG_LOG) 
-                    Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind (Single-Scene)! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
-
-                RewindServerSingleScene(rewindTick);
-                rewindCooldownCounter = 0;
-            }
         }
 
-        foreach (var car in cars)
+        if (rewindTick >= 0)
         {
-            car.ServerSendState();
+            // FIX: THÊM HARD CAP ĐỂ BẢO VỆ SERVER (Chỉ tua lại tối đa 30 Tick ~ 0.5 giây)
+            if (serverTick - rewindTick > 30)
+            {
+                rewindTick = serverTick - 30;
+                triggerReason += " [Capped at 30 Ticks]";
+            }
+
+            if (ENABLE_DEBUG_LOG) 
+                Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
+
+            RewindServerSingleScene(rewindTick);
+            // Sau khi Rewind xong, vị trí của xe đã được cập nhật ĐÚNG chuẩn Physics cho sát với serverTick.
+        } 
+
+        // 3. LƯU STATE VÀ GỬI VỀ CHO CLIENT
+        for (int i = 0; i < cars.Count; i++)
+        {
+            var car = cars[i];
+            if (car != null) 
+            {   
+                // Lấy State chuẩn nhất ở cuối frame
+                StatePayload statePayload = car.GetStateOfCar();
+                
+                // Gửi State cập nhật về Client
+                car.ServerSendState(statePayload);
+
+                // Lưu vào buffer để nếu tương lai có Rewind thì có dữ liệu khôi phục
+                PendState(car.ID, statePayload);
+            }
         }
     }
-
     private void RewindServerSingleScene(int tick)
     {
         if (!isRewinding && inputBufferDict.ContainsKey(tick) && stateBufferDict.ContainsKey(tick))
@@ -483,13 +493,13 @@ public class RaceManager : MonoBehaviour
                     {
                         carReal.ApplyState(firstState[id]);
                         
-                        var rb = carReal.GetComponent<Rigidbody>();
+                        // var rb = carReal.GetComponent<Rigidbody>();
                         
-                        rb.transform.position = firstState[id].position;
-                        rb.transform.rotation = firstState[id].rotation;
-                        rb.position = firstState[id].position;
-                        rb.rotation = firstState[id].rotation;
-                        rb.velocity = firstState[id].rotation * Vector3.forward * firstState[id].speed;
+                        // rb.transform.position = firstState[id].position;
+                        // rb.transform.rotation = firstState[id].rotation;
+                        // rb.position = firstState[id].position;
+                        // rb.rotation = firstState[id].rotation;
+                        // rb.velocity = firstState[id].rotation * Vector3.forward * firstState[id].speed;
                     }
                 }
 
@@ -529,12 +539,14 @@ public class RaceManager : MonoBehaviour
                                 lastInputs[id].tick = tickToProcess;
                             }
 
-                            StatePayload newState = carReal.ProcessMovement(lastInputs[id]);
-                            carReal.ApplyState(newState);
+                            // FIX: Sử dụng hàm ApplyInputForPhysics để ép vị trí, giúp Physics.Simulate nhận va chạm ngay!
+                            carReal.ApplyInputForPhysics(lastInputs[id]);
                         }
                     }
 
-                    Physics.Simulate(Time.fixedDeltaTime);
+                    Physics.Simulate(Time.fixedDeltaTime); // Tính toán va chạm Xuyên Tường!
+
+                    // ... Giữ nguyên phần Add State vào stateBufferDict bên dưới ...
 
                     if (!stateBufferDict.ContainsKey(tickToProcess))
                     {

@@ -497,8 +497,10 @@ public class CarController : NetworkBehaviour
         _targetPos = startPos;
     }
 
-    public void ProcessFixedCarController()
+    public (bool, int) ProcessFixedCarController()
     {
+        bool serverHasInput = false;
+
         float tickDt = Time.fixedDeltaTime;
 
         if (IsClient && IsOwner && !_rigidbody.isKinematic)
@@ -545,14 +547,20 @@ public class CarController : NetworkBehaviour
             _rigidbody.MovePosition(predicted.position);
             _rigidbody.MoveRotation(predicted.rotation);
             currentSpeed = predicted.speed;
-            _rigidbody.velocity = Vector3.zero;
+            //_rigidbody.velocity = Vector3.zero;
 
             SubmitInputServerRpc(inputPayload);
         }
 
         if (IsServer && !_rigidbody.isKinematic)
         {
-            bool hasProcessed = false;
+            int pendedInputCount = pendingInputs.Count;
+            int inputProcessedCount = 0;
+
+            // FIX: Dùng biến tạm để cộng dồn State toán học qua nhiều Ticks, tránh phụ thuộc vào _rigidbody.position bị trễ
+            Vector3 tempPos = _rigidbody.position;
+            Quaternion tempRot = _rigidbody.rotation;
+            float tempSpeed = currentSpeed;
 
             while (pendingInputs.Count > 0)
             {
@@ -565,6 +573,7 @@ public class CarController : NetworkBehaviour
 
                 if (nextTick <= lastProcessedTick)
                 {
+                    // Lỗi thời gian (Input đến trễ): Đẩy vào Buffer để RaceManager biết mà kích hoạt Rewind
                     RaceManager.Instance.PendInput(ID, pendingInputs[nextTick]);
                     pendingInputs.Remove(nextTick);
                     continue;
@@ -582,12 +591,15 @@ public class CarController : NetworkBehaviour
                     fallbackInput.tick = lastProcessedTick + 1; 
 
                     RaceManager.Instance.PendInput(ID, fallbackInput);
-                    StatePayload processedState = ProcessMovement(fallbackInput);
-                    RaceManager.Instance.PendState(ID, processedState);
+
+                    // Toán học cộng dồn cho tick bị lỡ (Sử dụng SimulateMovementFromTransform)
+                    StatePayload stepStateGap = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, fallbackInput, Time.fixedDeltaTime);
+                    tempPos = stepStateGap.position;
+                    tempRot = stepStateGap.rotation;
+                    tempSpeed = stepStateGap.speed;
 
                     lastProcessedTick = fallbackInput.tick;
-                    hasProcessed = true;
-                    
+                    serverHasInput = true;
                     continue;
                 }
 
@@ -596,18 +608,30 @@ public class CarController : NetworkBehaviour
                 lastKnownInput = inputForThisTick;
 
                 RaceManager.Instance.PendInput(ID, inputForThisTick);
-                StatePayload actualState = ProcessMovement(inputForThisTick);
-                RaceManager.Instance.PendState(ID, actualState);
+
+                // FIX: Toán học cộng dồn cho tick hiện tại (Nối tiếp State liên tục)
+                StatePayload stepState = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, inputForThisTick, Time.fixedDeltaTime);
+                tempPos = stepState.position;
+                tempRot = stepState.rotation;
+                tempSpeed = stepState.speed;
 
                 lastProcessedTick = nextTick;
-                hasProcessed = true;
+                serverHasInput = true;
+                inputProcessedCount++;
             }
 
-            if (hasProcessed)
+            // Gán tọa độ vật lý 1 LẦN DUY NHẤT ở cuối vòng lặp
+            if (serverHasInput)
             {
-                
+                _rigidbody.MovePosition(tempPos);
+                _rigidbody.MoveRotation(tempRot);
+                currentSpeed = tempSpeed;
             }
+
+            // if (ID != 0) Debug.Log($"Car {ID} pended inputs: {pendedInputCount}. Processed {inputProcessedCount} inputs");
         }
+
+        
 
         if (IsServer)
         {
@@ -659,6 +683,22 @@ public class CarController : NetworkBehaviour
 
             CalculateJerk();
         }
+
+        return (serverHasInput, lastProcessedTick);
+    }
+
+    // Hàm này được gọi trong quá trình Rewind/Fast-Forward của Server
+    public void ApplyInputForPhysics(InputPayload input)
+    {
+        if (input.tick == 0) return;
+
+        StatePayload state = SimulateMovementFromTransform(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime);
+
+        // ĐẶC BIỆT: Phải gán trực tiếp vào transform.position thay vì MovePosition 
+        // để Engine Vật lý nhận diện va chạm ngay trong cùng 1 frame Fast-Forward
+        _rigidbody.position = state.position;
+        _rigidbody.rotation = state.rotation;
+        currentSpeed = state.speed;
     }
 
     // public void FixedUpdate() {
@@ -687,6 +727,21 @@ public class CarController : NetworkBehaviour
         else
         {
             _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero };
+        }
+    }
+
+    public void ServerSendState(StatePayload state)
+    {
+        if (!_rigidbody.isKinematic)
+        {
+            _networkData.Value = new PosAndRotNetworkData() {
+                Position = state.position, // Lấy thẳng tọa độ tính toán từ Payload
+                Rotation = state.rotation.eulerAngles,
+                Velocity = _rigidbody.velocity,
+                Timestamp = Time.time,
+                Tick = state.tick, 
+                Speed = state.speed
+            };
         }
     }
 
@@ -731,6 +786,30 @@ public class CarController : NetworkBehaviour
 
     #region Handle Client Side Prediction and Server Reconciliation
 
+    
+
+    public StatePayload ProcessMovement(InputPayload input)
+    {
+        if (input.tick == 0) return new StatePayload();
+        
+        Vector3 startPos = _rigidbody.position;
+        Quaternion startRot = _rigidbody.rotation;
+        float startSpeed = currentSpeed;
+
+        float tickDt = Time.fixedDeltaTime;
+        StatePayload result = SimulateMovementFromTransform(startPos, startRot, startSpeed, input, tickDt);
+
+        if (IsServer)
+        {
+            _rigidbody.position = result.position;
+            _rigidbody.rotation = result.rotation;
+            currentSpeed = result.speed;
+        }
+
+        return result;
+    }
+
+    //Simulate deterministically
     StatePayload SimulateMovementFromTransform(Vector3 startPos, Quaternion startRot, float startSpeed, InputPayload input, float dt)
     {
         Vector3 pos = startPos;
@@ -783,7 +862,7 @@ public class CarController : NetworkBehaviour
         };
     }
 
-    public StatePayload ProcessMovement(InputPayload input)
+    public StatePayload ProcessMovementPhysically(InputPayload input)
     {
         if (input.tick == 0) return new StatePayload();
         
@@ -792,18 +871,76 @@ public class CarController : NetworkBehaviour
         float startSpeed = currentSpeed;
 
         float tickDt = Time.fixedDeltaTime;
-        StatePayload result = SimulateMovementFromTransform(startPos, startRot, startSpeed, input, tickDt);
+        StatePayload result = SimulateMovementPhysically(startPos, startRot, startSpeed, input, tickDt);
 
-        if (IsServer)
-        {
-            _rigidbody.position = result.position;
-            _rigidbody.rotation = result.rotation;
-            currentSpeed = result.speed;
-        }
+        // if (IsServer)
+        // {
+        //     _rigidbody.position = result.position;
+        //     _rigidbody.rotation = result.rotation;
+        //     currentSpeed = result.speed;
+        // }
 
         return result;
     }
 
+    public StatePayload SimulateMovementPhysically(Vector3 startPos, Quaternion startRot, float startSpeed, InputPayload input, float dt)
+    {
+        Vector3 pos = startPos;
+        Quaternion rot = startRot;
+        float speed = startSpeed;
+
+        float accel = Mathf.Clamp(input.inputAcceleration, -1f, 1f);
+        float steer = Mathf.Clamp(input.inputSteering, -1f, 1f);
+        float brake = Mathf.Clamp(input.inputBrake, 0f, 1f);
+
+        if (Mathf.Abs(accel) > 0.01f)
+        {
+            speed += accel * accelerationRate * dt;
+        }
+        else
+        {
+            speed = Mathf.Lerp(speed, 0f, decelerationRate * dt);
+        }
+
+        if (brake > 0.1f)
+        {
+            speed = Mathf.Lerp(speed, 0f, brakeRate * dt);
+        }
+
+        float rubberMultiplier = 1f;
+        if (RubberBand && NetworkPlayer != null)
+        {
+            rubberMultiplier = NetworkPlayer.RubberBandCoefficient;
+        }
+
+        float currentMaxForward = maxSpeed * rubberMultiplier;
+        speed = Mathf.Clamp(speed, -maxReverseSpeed, currentMaxForward);
+
+        if (Mathf.Abs(speed) > 0.5f)
+        {
+            float directionMultiplier = Mathf.Sign(speed);
+            float turnAmount = steer * turnSpeed * directionMultiplier * dt;
+            Quaternion deltaRot = Quaternion.Euler(0f, turnAmount, 0f);
+            rot *= deltaRot;
+
+            _rigidbody.MoveRotation(rot);
+        }
+
+        pos += rot * Vector3.forward * speed * dt;
+
+        _rigidbody.MovePosition(pos);
+
+        return new StatePayload()
+        {
+            tick = input.tick,
+            position = pos,
+            rotation = rot,
+            speed = speed
+        };
+    }
+
+
+    //Server Reconciliation
     void HandleServerReconciliation()
     {
         if (latestServerState.tick == 0) return;
