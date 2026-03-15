@@ -468,6 +468,15 @@ public class CarController : NetworkBehaviour
         latestServerState.position = newVal.Position;
         latestServerState.rotation = Quaternion.Euler(newVal.Rotation);
         latestServerState.speed = newVal.Speed;
+
+        // Debug.Log($"{GlobalVar.CLIENT} <color=yellow>[{ID}]</color> {GlobalVar.CLIENT_RECEIVE_STATE} " +
+        //         GlobalVar.GetStringDataList(new []{
+        //             ("tick", $"{newVal.Tick}"),
+        //             ("position", $"{newVal.Position}"),
+        //             ("rotation", $"{newVal.Rotation}"),
+        //             ("speed", $"{newVal.Speed}"),
+        //         })
+        //     );
     }
 
     private float CalculateStdDev(List<float> values) { if (values.Count <= 1) return 0; float avg = 0; foreach(var v in values) avg += v; avg /= values.Count; float sumSq = 0; foreach(var v in values) sumSq += (v - avg) * (v - avg); return Mathf.Sqrt(sumSq / (values.Count - 1)); }
@@ -548,8 +557,16 @@ public class CarController : NetworkBehaviour
             _rigidbody.MoveRotation(predicted.rotation);
             currentSpeed = predicted.speed;
             //_rigidbody.velocity = Vector3.zero;
-
             SubmitInputServerRpc(inputPayload);
+
+            // Debug.Log($"{GlobalVar.CLIENT} <color=yellow>[{ID}]</color> {GlobalVar.CLIENT_SEND_INPUT} " +
+            //     GlobalVar.GetStringDataList(new []{
+            //         ("tick", $"{currentTick}"),
+            //         ("position", $"{predicted.position}"),
+            //         ("rotation", $"{predicted.rotation}"),
+            //         ("speed", $"{predicted.speed}"),
+            //     })
+            // );
         }
 
         if (IsServer && !_rigidbody.isKinematic)
@@ -557,14 +574,20 @@ public class CarController : NetworkBehaviour
             int pendedInputCount = pendingInputs.Count;
             int inputProcessedCount = 0;
 
-            // FIX: Dùng biến tạm để cộng dồn State toán học qua nhiều Ticks, tránh phụ thuộc vào _rigidbody.position bị trễ
             Vector3 tempPos = _rigidbody.position;
             Quaternion tempRot = _rigidbody.rotation;
             float tempSpeed = currentSpeed;
 
+            int currentServerTick = NetworkManager.Singleton.ServerTime.Tick;
+
             while (pendingInputs.Count > 0)
             {
                 int nextTick = pendingInputs.Keys.First();
+
+                if (nextTick > currentServerTick) 
+                {
+                    break;
+                }
                 
                 if (lastProcessedTick == 0)
                 {
@@ -573,7 +596,6 @@ public class CarController : NetworkBehaviour
 
                 if (nextTick <= lastProcessedTick)
                 {
-                    // Lỗi thời gian (Input đến trễ): Đẩy vào Buffer để RaceManager biết mà kích hoạt Rewind
                     RaceManager.Instance.PendInput(ID, pendingInputs[nextTick]);
                     pendingInputs.Remove(nextTick);
                     continue;
@@ -592,7 +614,6 @@ public class CarController : NetworkBehaviour
 
                     RaceManager.Instance.PendInput(ID, fallbackInput);
 
-                    // Toán học cộng dồn cho tick bị lỡ (Sử dụng SimulateMovementFromTransform)
                     StatePayload stepStateGap = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, fallbackInput, Time.fixedDeltaTime);
                     tempPos = stepStateGap.position;
                     tempRot = stepStateGap.rotation;
@@ -609,7 +630,6 @@ public class CarController : NetworkBehaviour
 
                 RaceManager.Instance.PendInput(ID, inputForThisTick);
 
-                // FIX: Toán học cộng dồn cho tick hiện tại (Nối tiếp State liên tục)
                 StatePayload stepState = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, inputForThisTick, Time.fixedDeltaTime);
                 tempPos = stepState.position;
                 tempRot = stepState.rotation;
@@ -620,7 +640,6 @@ public class CarController : NetworkBehaviour
                 inputProcessedCount++;
             }
 
-            // Gán tọa độ vật lý 1 LẦN DUY NHẤT ở cuối vòng lặp
             if (serverHasInput)
             {
                 _rigidbody.MovePosition(tempPos);
@@ -687,17 +706,14 @@ public class CarController : NetworkBehaviour
         return (serverHasInput, lastProcessedTick);
     }
 
-    // Hàm này được gọi trong quá trình Rewind/Fast-Forward của Server
     public void ApplyInputForPhysics(InputPayload input)
     {
         if (input.tick == 0) return;
 
         StatePayload state = SimulateMovementFromTransform(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime);
 
-        // ĐẶC BIỆT: Phải gán trực tiếp vào transform.position thay vì MovePosition 
-        // để Engine Vật lý nhận diện va chạm ngay trong cùng 1 frame Fast-Forward
-        _rigidbody.position = state.position;
-        _rigidbody.rotation = state.rotation;
+        _rigidbody.MovePosition(state.position);
+        _rigidbody.MoveRotation(state.rotation);
         currentSpeed = state.speed;
     }
 
@@ -1023,6 +1039,12 @@ public class CarController : NetworkBehaviour
         {
             pendingInputs[input.tick] = input;
         }
+
+        // Debug.Log($"{GlobalVar.SERVER} {GlobalVar.SERVER_RECEIVE_INPUT} " +
+        //         GlobalVar.GetStringDataList(new []{
+        //             ("tick", $"{input.tick}"),
+        //         })
+        //     );
     }
 
     public void ApplyState(StatePayload state)
@@ -1032,11 +1054,20 @@ public class CarController : NetworkBehaviour
         currentSpeed = state.speed;
     }
 
-    public StatePayload GetStateOfCar()
+    // Sửa lại hàm GetStateOfCar để hỗ trợ ép kiểu Tick khi Rewind
+    public StatePayload GetStateOfCar(int overwriteTick = -1)
     {
+        int currentTick = overwriteTick > 0 ? overwriteTick : lastProcessedTick;
+
+        // Đảm bảo nếu không có NetworkManager thì trả về 0, nhưng ưu tiên overwriteTick
+        if (overwriteTick <= 0 && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+        {
+            currentTick = lastProcessedTick; // Hoặc NetworkManager.Singleton.ServerTime.Tick tùy logic của bạn, nhưng lastProcessedTick chuẩn hơn cho State
+        }
+
         return new StatePayload()
         {
-            tick = NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer ? NetworkManager.Singleton.ServerTime.Tick : 0,
+            tick = currentTick, // Sử dụng tick đã được xác định rõ ràng
             position = transform.position,
             rotation = transform.rotation,
             speed = currentSpeed

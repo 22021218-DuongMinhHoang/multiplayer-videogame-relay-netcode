@@ -402,7 +402,6 @@ public class RaceManager : MonoBehaviour
 
         List<CarController> cars = new();
 
-        // 1. TÍNH TOÁN CỘNG DỒN CHO FRAME HIỆN TẠI (ARCADE MOVEMENT)
         foreach (var player in players)
         {
             CarController car = player.GetCarController;
@@ -420,7 +419,6 @@ public class RaceManager : MonoBehaviour
         // Server side
         if ((NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) && !canRewind) return;
 
-        // 2. KÍCH HOẠT REWIND & FAST-FORWARD (Nếu có va chạm)
         int rewindTick = -1;
         string triggerReason = "";
 
@@ -429,7 +427,6 @@ public class RaceManager : MonoBehaviour
             int tick = collideTickQueue[0];
             collideTickQueue.RemoveAt(0);
 
-            // Bắt được Tick cũ nhất có va chạm
             if (serverTick - tick <= 100 && serverTick - tick >= 0)
             {
                 if (rewindTick == -1 || tick < rewindTick) {
@@ -441,7 +438,6 @@ public class RaceManager : MonoBehaviour
 
         if (rewindTick >= 0)
         {
-            // FIX: THÊM HARD CAP ĐỂ BẢO VỆ SERVER (Chỉ tua lại tối đa 30 Tick ~ 0.5 giây)
             if (serverTick - rewindTick > 30)
             {
                 rewindTick = serverTick - 30;
@@ -452,22 +448,17 @@ public class RaceManager : MonoBehaviour
                 Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
 
             RewindServerSingleScene(rewindTick);
-            // Sau khi Rewind xong, vị trí của xe đã được cập nhật ĐÚNG chuẩn Physics cho sát với serverTick.
         } 
 
-        // 3. LƯU STATE VÀ GỬI VỀ CHO CLIENT
         for (int i = 0; i < cars.Count; i++)
         {
             var car = cars[i];
             if (car != null) 
             {   
-                // Lấy State chuẩn nhất ở cuối frame
                 StatePayload statePayload = car.GetStateOfCar();
                 
-                // Gửi State cập nhật về Client
                 car.ServerSendState(statePayload);
 
-                // Lưu vào buffer để nếu tương lai có Rewind thì có dữ liệu khôi phục
                 PendState(car.ID, statePayload);
             }
         }
@@ -493,13 +484,6 @@ public class RaceManager : MonoBehaviour
                     {
                         carReal.ApplyState(firstState[id]);
                         
-                        // var rb = carReal.GetComponent<Rigidbody>();
-                        
-                        // rb.transform.position = firstState[id].position;
-                        // rb.transform.rotation = firstState[id].rotation;
-                        // rb.position = firstState[id].position;
-                        // rb.rotation = firstState[id].rotation;
-                        // rb.velocity = firstState[id].rotation * Vector3.forward * firstState[id].speed;
                     }
                 }
 
@@ -539,14 +523,11 @@ public class RaceManager : MonoBehaviour
                                 lastInputs[id].tick = tickToProcess;
                             }
 
-                            // FIX: Sử dụng hàm ApplyInputForPhysics để ép vị trí, giúp Physics.Simulate nhận va chạm ngay!
                             carReal.ApplyInputForPhysics(lastInputs[id]);
                         }
                     }
 
-                    Physics.Simulate(Time.fixedDeltaTime); // Tính toán va chạm Xuyên Tường!
-
-                    // ... Giữ nguyên phần Add State vào stateBufferDict bên dưới ...
+                    Physics.Simulate(Time.fixedDeltaTime);
 
                     if (!stateBufferDict.ContainsKey(tickToProcess))
                     {
@@ -558,7 +539,7 @@ public class RaceManager : MonoBehaviour
                         CarController carReal = players[i].GetCarController;
                         int id = players[i].ID;
                         if (carReal != null) 
-                            stateBufferDict[tickToProcess][id] = carReal.GetStateOfCar();
+                            stateBufferDict[tickToProcess][id] = carReal.GetStateOfCar(tickToProcess);
                     }
 
                     tickToProcess++;
