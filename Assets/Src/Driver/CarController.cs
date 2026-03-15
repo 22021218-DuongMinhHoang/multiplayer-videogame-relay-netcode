@@ -188,8 +188,9 @@ public class CarController : NetworkBehaviour
     [SerializeField] private CorrectionMode currentCorrectionMode = CorrectionMode.SmoothDamp;
 
     [Header("Client Side Prediction and Server Reconcilation")]
+    
     private int currentTick = 0; 
-    private const int BUFFER_SIZE = 4096;
+    private const int BUFFER_SIZE = 8192;
 
     private StatePayload[] stateBuffer;
     private InputPayload[] inputBuffer;
@@ -223,6 +224,7 @@ public class CarController : NetworkBehaviour
     private float hitThreshold = 0.5f;
     private float _lastPacketLocalTime;
     private List<float> _packetIntervals = new List<float>();
+    
 
     Vector3 prevPos;
     float prevVel;
@@ -236,6 +238,7 @@ public class CarController : NetworkBehaviour
     private bool IsRacing => State != CarState.Dead && State != CarState.Idle;
     private bool IsRace => GameManager.Instance.CLASSIF_STATES.Contains(NetworkPlayer.CurrentRace);
     private bool IsClassif => GameManager.Instance.RACE_STATES.Contains(NetworkPlayer.CurrentRace);
+    public int GetLastProcessedTick() => lastProcessedTick;
 
     #endregion
 
@@ -469,14 +472,7 @@ public class CarController : NetworkBehaviour
         latestServerState.rotation = Quaternion.Euler(newVal.Rotation);
         latestServerState.speed = newVal.Speed;
 
-        // Debug.Log($"{GlobalVar.CLIENT} <color=yellow>[{ID}]</color> {GlobalVar.CLIENT_RECEIVE_STATE} " +
-        //         GlobalVar.GetStringDataList(new []{
-        //             ("tick", $"{newVal.Tick}"),
-        //             ("position", $"{newVal.Position}"),
-        //             ("rotation", $"{newVal.Rotation}"),
-        //             ("speed", $"{newVal.Speed}"),
-        //         })
-        //     );
+        // Debug.Log($"{GlobalVar.CLIENT} <color=yellow>[{ID}]</color> {GlobalVar.CLIENT_RECEIVE_STATE} ..."); // Đã comment để tránh nhiễu log
     }
 
     private float CalculateStdDev(List<float> values) { if (values.Count <= 1) return 0; float avg = 0; foreach(var v in values) avg += v; avg /= values.Count; float sumSq = 0; foreach(var v in values) sumSq += (v - avg) * (v - avg); return Mathf.Sqrt(sumSq / (values.Count - 1)); }
@@ -514,26 +510,46 @@ public class CarController : NetworkBehaviour
 
         if (IsClient && IsOwner && !_rigidbody.isKinematic)
         {
-            if (currentTick == 0 && NetworkManager.Singleton != null) 
+            // Tự đếm tick 50Hz đồng bộ với Server
+            if (currentTick == 0 && NetworkManager.Singleton != null && NetworkManager.Singleton.ServerTime.Tick > 0) 
             {
                 currentTick = NetworkManager.Singleton.ServerTime.Tick;
             }
-            else 
+            else if (currentTick > 0)
             {
                 currentTick++;
             }
+            else return (false, 0); // Đợi đến khi kết nối ổn định mới bắt đầu chạy
 
-            HandleServerReconciliation();
+            // Kiểm tra lệch tick client/server (chỉ khi cả hai tick > 1)
+            if (NetworkManager.Singleton != null)
+            {
+                int serverTick = NetworkManager.Singleton.ServerTime.Tick;
+                if (currentTick > 1 && serverTick > 1)
+                {
+                    int tickDiff = Mathf.Abs(currentTick - serverTick);
+                    if (tickDiff > 10 && tickDiff < 100)
+                    {
+                        Debug.LogWarning($"[CarController] Cảnh báo: Tick client/server lệch {tickDiff} (client={currentTick}, server={serverTick})");
+                    }
+                    else if (tickDiff >= 100)
+                    {
+                        Debug.LogWarning($"[CarController] Tick client/server lệch quá lớn ({tickDiff}), tự đồng bộ lại: client={currentTick}, server={serverTick}");
+                        currentTick = serverTick;
+                    }
+                }
+            }
 
+            // Nếu không có input mới (thả tay), vẫn tạo inputPayload với giá trị 0
             InputPayload inputPayload = new InputPayload();
             inputPayload.tick = currentTick;
-            inputPayload.inputAcceleration = inputAcceleration;
-            inputPayload.inputBrake = inputBrake;
-            inputPayload.inputSteering = inputSteering;
+            inputPayload.inputAcceleration = Mathf.Abs(inputAcceleration) > 0.0001f ? inputAcceleration : 0f;
+            inputPayload.inputBrake = Mathf.Abs(inputBrake) > 0.0001f ? inputBrake : 0f;
+            inputPayload.inputSteering = Mathf.Abs(inputSteering) > 0.0001f ? inputSteering : 0f;
 
+            // Kiểm tra va chạm như cũ
             Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
             RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
-            
             inputPayload.isCollide = false;
             foreach (var hit in hits)
             {
@@ -549,107 +565,118 @@ public class CarController : NetworkBehaviour
 
             int bufferIndex = BufIdx(currentTick);
             inputBuffer[bufferIndex] = inputPayload;
+            lastKnownInput = inputPayload;
+            // if (ENABLE_DEBUG_LOG)
+            // {
+            //     Debug.Log($"[INPUT-BUFFER-DEBUG] Write inputBuffer[{bufferIndex}] for tick={currentTick}: accel={inputPayload.inputAcceleration}, steer={inputPayload.inputSteering}, brake={inputPayload.inputBrake}, isCollide={inputPayload.isCollide}");
+            // }
 
             StatePayload predicted = SimulateMovementFromTransform(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, tickDt);
+            predicted.tick = currentTick; // Đảm bảo tick luôn đúng khi ghi buffer
             stateBuffer[bufferIndex] = predicted;
 
+            float maxSpd = Mathf.Max(10f, maxSpeed * 1.2f);
+            float clampedSpeed = Mathf.Clamp(predicted.speed, -maxSpd, maxSpd);
             _rigidbody.MovePosition(predicted.position);
             _rigidbody.MoveRotation(predicted.rotation);
-            currentSpeed = predicted.speed;
-            //_rigidbody.velocity = Vector3.zero;
+            currentSpeed = clampedSpeed;
             SubmitInputServerRpc(inputPayload);
 
-            // Debug.Log($"{GlobalVar.CLIENT} <color=yellow>[{ID}]</color> {GlobalVar.CLIENT_SEND_INPUT} " +
-            //     GlobalVar.GetStringDataList(new []{
-            //         ("tick", $"{currentTick}"),
-            //         ("position", $"{predicted.position}"),
-            //         ("rotation", $"{predicted.rotation}"),
-            //         ("speed", $"{predicted.speed}"),
-            //     })
-            // );
+            // Gọi reconcile sau khi đã ghi inputBuffer cho tick hiện tại
+            HandleServerReconciliation();
         }
 
         if (IsServer && !_rigidbody.isKinematic)
         {
-            int pendedInputCount = pendingInputs.Count;
-            int inputProcessedCount = 0;
+            // if (ID == 0)
+            // {
+            //     Debug.Log($"<color=yellow>[SERVER-START]</color> LastProcessed: {lastProcessedTick} | Kho Input đang có: {pendingInputs.Count} gói | Pos hiện tại: {_rigidbody.position.z:F2}");
+            //     if (pendingInputs.Count > 0) {
+            //         Debug.Log($"<color=yellow>[SERVER-DETAIL]</color> Gói tiếp theo chờ xử lý là Tick: {pendingInputs.Keys.First()}");
+            //     }
+            // }
+            if (lastProcessedTick == 0)
+            {
+                if (pendingInputs.Count > 0) lastProcessedTick = pendingInputs.Keys.First() - 1;
+                else return (false, 0); 
+            }
 
             Vector3 tempPos = _rigidbody.position;
             Quaternion tempRot = _rigidbody.rotation;
             float tempSpeed = currentSpeed;
+            bool hasProcessed = false;
 
-            int currentServerTick = NetworkManager.Singleton.ServerTime.Tick;
-
+            // 1. DỌN RÁC & GỬI REWIND: Nhổ các gói tin đến trễ ra khỏi kho
             while (pendingInputs.Count > 0)
             {
                 int nextTick = pendingInputs.Keys.First();
-
-                if (nextTick > currentServerTick) 
-                {
-                    break;
-                }
-                
-                if (lastProcessedTick == 0)
-                {
-                    lastProcessedTick = nextTick - 1; 
-                }
-
                 if (nextTick <= lastProcessedTick)
                 {
-                    RaceManager.Instance.PendInput(ID, pendingInputs[nextTick]);
+                    InputPayload oldInput = pendingInputs[nextTick];
                     pendingInputs.Remove(nextTick);
+                    
+                    // Cực kỳ quan trọng: Cập nhật lại Input cũ để nếu bạn "Nhả phím", 
+                    // Server sẽ biết mà dừng việc trượt quán tính lại ngay lập tức!
+                    lastKnownInput = oldInput; 
+                    
+                    // Lưu thẳng vào Buffer lịch sử thay vì gọi PendInput
+                    if (!RaceManager.Instance.inputBufferDict.ContainsKey(nextTick))
+                        RaceManager.Instance.inputBufferDict.Add(nextTick, new InputPayload[4]);
+                    RaceManager.Instance.inputBufferDict[nextTick][ID] = oldInput;
+                    
                     continue;
                 }
+                break;
+            }
 
-                if (nextTick > lastProcessedTick + 1)
+            // 2. CHẠY BÙ & NGOẠI SUY (JITTER BUFFER)
+            int maxProcess = pendingInputs.Count > 2 ? 2 : 1;
+            int processCount = 0;
+
+            while (processCount < maxProcess)
+            {
+                int targetTick = lastProcessedTick + 1;
+                InputPayload inputToProcess;
+
+                if (pendingInputs.TryGetValue(targetTick, out InputPayload receivedInput))
                 {
-                    if (nextTick - lastProcessedTick > 30)
-                    {
-                        lastProcessedTick = nextTick - 1;
-                        continue;
-                    }
-
-                    InputPayload fallbackInput = lastKnownInput;
-                    fallbackInput.tick = lastProcessedTick + 1; 
-
-                    RaceManager.Instance.PendInput(ID, fallbackInput);
-
-                    StatePayload stepStateGap = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, fallbackInput, Time.fixedDeltaTime);
-                    tempPos = stepStateGap.position;
-                    tempRot = stepStateGap.rotation;
-                    tempSpeed = stepStateGap.speed;
-
-                    lastProcessedTick = fallbackInput.tick;
-                    serverHasInput = true;
-                    continue;
+                    inputToProcess = receivedInput;
+                    pendingInputs.Remove(targetTick);
+                    lastKnownInput = receivedInput;
+                }
+                else
+                {
+                    inputToProcess = lastKnownInput;
+                    inputToProcess.tick = targetTick;
                 }
 
-                InputPayload inputForThisTick = pendingInputs[nextTick];
-                pendingInputs.Remove(nextTick);
-                lastKnownInput = inputForThisTick;
+                RaceManager.Instance.PendInput(ID, inputToProcess);
 
-                RaceManager.Instance.PendInput(ID, inputForThisTick);
-
-                StatePayload stepState = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, inputForThisTick, Time.fixedDeltaTime);
+                StatePayload stepState = SimulateMovementFromTransform(tempPos, tempRot, tempSpeed, inputToProcess, Time.fixedDeltaTime);
                 tempPos = stepState.position;
                 tempRot = stepState.rotation;
                 tempSpeed = stepState.speed;
 
-                lastProcessedTick = nextTick;
-                serverHasInput = true;
-                inputProcessedCount++;
+                lastProcessedTick = targetTick;
+                hasProcessed = true;
+                processCount++;
+
+                if (pendingInputs.Count == 0) break; 
             }
 
-            if (serverHasInput)
+            // Gán thẳng vào position để không bị delay physics
+            if (hasProcessed)
             {
-                _rigidbody.MovePosition(tempPos);
-                _rigidbody.MoveRotation(tempRot);
+                _rigidbody.position = tempPos; 
+                _rigidbody.rotation = tempRot;
                 currentSpeed = tempSpeed;
             }
 
-            // if (ID != 0) Debug.Log($"Car {ID} pended inputs: {pendedInputCount}. Processed {inputProcessedCount} inputs");
+            // if (ID == 0)
+            // {
+            //     Debug.Log($"<color=green>[SERVER-END]</color> Vừa xử lý xong đến Tick: {lastProcessedTick} | Tốc độ tính ra: {currentSpeed:F2} | Pos mới: {_rigidbody.position.z:F2}");
+            // }
         }
-
         
 
         if (IsServer)
@@ -686,8 +713,8 @@ public class CarController : NetworkBehaviour
                 if (currentCorrectionMode == CorrectionMode.SmoothDamp)
                 {
                     Vector3 smoothPos = Vector3.SmoothDamp(transform.position, _targetPos, ref _vel, APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME, float.PositiveInfinity, Time.fixedDeltaTime);
-                    _rigidbody.velocity = _vel;
                     _rigidbody.MovePosition(smoothPos);
+                    _rigidbody.velocity = _vel; // Đảm bảo velocity đúng
                 }
                 else
                 {
@@ -695,11 +722,11 @@ public class CarController : NetworkBehaviour
                     Vector3 lerpPos = Vector3.Lerp(transform.position, _targetPos, t);
                     _vel = (lerpPos - transform.position) / Time.fixedDeltaTime;
                     _rigidbody.MovePosition(lerpPos);
+                    _rigidbody.velocity = _vel; // Đảm bảo velocity đúng
                 }
                 var targetRot = Quaternion.Euler(_networkData.Value.Rotation);
                 _rigidbody.MoveRotation(Quaternion.Slerp(transform.rotation, targetRot, Time.fixedDeltaTime * 10f));
             }
-
             CalculateJerk();
         }
 
@@ -709,11 +736,12 @@ public class CarController : NetworkBehaviour
     public void ApplyInputForPhysics(InputPayload input)
     {
         if (input.tick == 0) return;
-
+        // Cập nhật lastKnownInput để prediction luôn đúng
+        lastKnownInput = input;
         StatePayload state = SimulateMovementFromTransform(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime);
-
-        _rigidbody.MovePosition(state.position);
-        _rigidbody.MoveRotation(state.rotation);
+        // Khi rewind/fast-forward chỉ update trực tiếp, không dùng MovePosition/MoveRotation
+        _rigidbody.position = state.position;
+        _rigidbody.rotation = state.rotation;
         currentSpeed = state.speed;
     }
 
@@ -962,25 +990,55 @@ public class CarController : NetworkBehaviour
         if (latestServerState.tick == 0) return;
         if (lastProcessedState.tick == latestServerState.tick && lastProcessedState.Equals(latestServerState)) return;
 
-        lastProcessedState = latestServerState;
-
         int serverStateBufferIndex = BufIdx(latestServerState.tick);
         StatePayload predictedPastState = stateBuffer[serverStateBufferIndex];
 
-        if (predictedPastState.tick != latestServerState.tick) 
+        // Nếu tick không khớp, tìm đúng state trong buffer
+        if (predictedPastState.tick != latestServerState.tick)
         {
-            return; 
+            bool found = false;
+            for (int i = 0; i < stateBuffer.Length; i++)
+            {
+                if (stateBuffer[i].tick == latestServerState.tick)
+                {
+                    predictedPastState = stateBuffer[i];
+                    found = true;
+                    Debug.Log($"[RECONCILE-DEBUG] Đã tìm thấy predictedPastState đúng tick tại index {i}");
+                    break;
+                }
+            }
+            if (!found)
+            {
+                var ticksInBuffer = new List<int>();
+                for (int i = 0; i < BUFFER_SIZE; i++)
+                {
+                    if (stateBuffer[i].tick != 0)
+                        ticksInBuffer.Add(stateBuffer[i].tick);
+                }
+                Debug.Log($"[RECONCILE-DEBUG] Không tìm thấy predictedPastState với tick={latestServerState.tick + 1} trong buffer. predictedPastState.tick({predictedPastState.tick}) tại tick {currentTick}. Các tick hiện có trong buffer: [{string.Join(", ", ticksInBuffer)}]");
+            }
         }
 
         float positionError = Vector3.Distance(latestServerState.position, predictedPastState.position);
         float rotationError = Quaternion.Angle(latestServerState.rotation, predictedPastState.rotation);
 
+        // Tăng ngưỡng để tránh rubberband liên tục
         const float RECONCILE_POS_THRESHOLD = 1.5f;
         const float RECONCILE_ROT_THRESHOLD = 1.0f;
+        const float RECONCILE_LERP_TIME = 0.2f; // thời gian làm mượt (giây)
+        const float LOW_SPEED_THRESHOLD = 0.15f; // m/s, nếu xe gần như đứng yên thì không reconcile
 
-        if ((positionError > RECONCILE_POS_THRESHOLD || rotationError > RECONCILE_ROT_THRESHOLD) && !isRewinding)
+        // Nếu sai số nhỏ hoặc xe gần như đứng yên thì không reconcile để tránh snap liên tục
+        bool isNearlyStopped = Mathf.Abs(currentSpeed) < LOW_SPEED_THRESHOLD && Mathf.Abs(latestServerState.speed) < LOW_SPEED_THRESHOLD;
+        if ((positionError > RECONCILE_POS_THRESHOLD || rotationError > RECONCILE_ROT_THRESHOLD)
+            && !isRewinding && !isNearlyStopped)
         {
             isRewinding = true;
+
+            Debug.Log($"[RECONCILE-DEBUG] BẮT ĐẦU RECONCILE: tick={currentTick}, serverTick={latestServerState.tick}, posErr={positionError:F3}, rotErr={rotationError:F3}");
+            Debug.Log($"[RECONCILE-DEBUG] latestServerState: pos={latestServerState.position}, rot={latestServerState.rotation}, speed={latestServerState.speed}");
+            Debug.Log($"[RECONCILE-DEBUG] predictedPastState: pos={predictedPastState.position}, rot={predictedPastState.rotation}, speed={predictedPastState.speed}");
+            Debug.Log($"[RECONCILE-DEBUG] RubberBandCoeff={NetworkPlayer?.RubberBandCoefficient}, accelRate={accelerationRate}, turnSpeed={turnSpeed}, brakeRate={brakeRate}");
 
             Vector3 rewindPos = latestServerState.position;
             Quaternion rewindRot = latestServerState.rotation;
@@ -988,18 +1046,22 @@ public class CarController : NetworkBehaviour
 
             float tickDt = Time.fixedDeltaTime;
 
-            for (int tickToProcess = latestServerState.tick + 1; tickToProcess <= currentTick; tickToProcess++)
+            for (int tickToProcess = latestServerState.tick + 1; tickToProcess <= currentTick - 1; tickToProcess++)
             {
                 int bufferIndex = BufIdx(tickToProcess);
                 InputPayload inputForTick = inputBuffer[bufferIndex];
 
                 if (inputForTick.tick != tickToProcess)
                 {
+                    Debug.LogWarning($"[RECONCILE-DEBUG] Thiếu inputBuffer tại tick {tickToProcess}, dùng lastKnownInput! lastKnownInput: accel={lastKnownInput.inputAcceleration}, steer={lastKnownInput.inputSteering}, brake={lastKnownInput.inputBrake}");
                     inputForTick = lastKnownInput;
                     inputForTick.tick = tickToProcess;
                 }
 
+                Debug.Log($"[RECONCILE-DEBUG] tick {tickToProcess}: inputForTick(accel={inputForTick.inputAcceleration}, steer={inputForTick.inputSteering}, brake={inputForTick.inputBrake}), rewindPos={rewindPos}, rewindSpeed={rewindSpeed}");
+
                 StatePayload stepState = SimulateMovementFromTransform(rewindPos, rewindRot, rewindSpeed, inputForTick, tickDt);
+                stepState.tick = tickToProcess; // Đảm bảo tick luôn đúng khi ghi buffer
 
                 rewindPos = stepState.position;
                 rewindRot = stepState.rotation;
@@ -1008,16 +1070,72 @@ public class CarController : NetworkBehaviour
                 stateBuffer[bufferIndex] = stepState;
             }
 
-            _rigidbody.MovePosition(rewindPos);
-            _rigidbody.MoveRotation(rewindRot);
-            _rigidbody.velocity = rewindRot * Vector3.forward * rewindSpeed;
-            currentSpeed = rewindSpeed;
+            // Clamp speed để tránh snap bất thường
+            float maxSpd = Mathf.Max(10f, maxSpeed * 1.2f);
+            rewindSpeed = Mathf.Clamp(rewindSpeed, -maxSpd, maxSpd);
+            // Nếu tốc độ rất nhỏ thì cho về 0 luôn để tránh trôi lắt nhắt
+            if (Mathf.Abs(rewindSpeed) < LOW_SPEED_THRESHOLD) rewindSpeed = 0f;
 
-            if (ENABLE_DEBUG_LOG) 
-                Debug.Log($"[Reconcile] Đã sửa lỗi! Sai số Vị trí: {positionError:F3} | Góc: {rotationError:F3}. Đã re-simulate từ tick {latestServerState.tick} đến {currentTick}");
+            // Đồng bộ lại buffer tại tick hiện tại
+            stateBuffer[BufIdx(currentTick)] = new StatePayload { tick = currentTick, position = rewindPos, rotation = rewindRot, speed = rewindSpeed };
+            lastProcessedState = new StatePayload { tick = currentTick, position = rewindPos, rotation = rewindRot, speed = rewindSpeed };
 
-            isRewinding = false;
+            // Nếu sai số quá lớn, snap cứng (như cũ)
+            if (positionError > RECONCILE_POS_THRESHOLD * 2f || rotationError > RECONCILE_ROT_THRESHOLD * 2f)
+            {
+                _rigidbody.position = rewindPos;
+                _rigidbody.rotation = rewindRot;
+                _rigidbody.velocity = rewindRot * Vector3.forward * rewindSpeed;
+                currentSpeed = rewindSpeed;
+                Debug.Log($"[RECONCILE-DEBUG] SNAP CỨNG (sai số lớn): tick={currentTick}, rewindPos={rewindPos}, rewindSpeed={rewindSpeed}");
+                isRewinding = false;
+            }
+            else
+            {
+                // Làm mượt vị trí/rotation trong RECONCILE_LERP_TIME giây
+                StartCoroutine(SmoothReconcileLerpWithBufferSync(rewindPos, rewindRot, rewindSpeed, RECONCILE_LERP_TIME));
+                Debug.Log($"[RECONCILE-DEBUG] LERP reconcile: tick={currentTick}, targetPos={rewindPos}, targetSpeed={rewindSpeed}");
+            }
+
+            Debug.Log($"[RECONCILE-DEBUG] KẾT THÚC RECONCILE: tick={currentTick}, rewindPos={rewindPos}, rewindSpeed={rewindSpeed}");
         }
+        else if (isNearlyStopped)
+        {
+            // Nếu xe gần như đứng yên, đồng bộ lại buffer và state để tránh drift nhỏ tích lũy
+            float stoppedSpeed = 0f;
+            stateBuffer[BufIdx(currentTick)] = new StatePayload { tick = currentTick, position = latestServerState.position, rotation = latestServerState.rotation, speed = stoppedSpeed };
+            lastProcessedState = new StatePayload { tick = currentTick, position = latestServerState.position, rotation = latestServerState.rotation, speed = stoppedSpeed };
+            currentSpeed = stoppedSpeed;
+            _rigidbody.position = latestServerState.position;
+            _rigidbody.rotation = latestServerState.rotation;
+            _rigidbody.velocity = Vector3.zero;
+        }
+    }
+
+    // Làm mượt reconcile bằng coroutine
+    // Lerp reconcile và đồng bộ lại buffer, lastProcessedState, isRewinding
+    private IEnumerator SmoothReconcileLerpWithBufferSync(Vector3 targetPos, Quaternion targetRot, float targetSpeed, float duration)
+    {
+        Vector3 startPos = _rigidbody.position;
+        Quaternion startRot = _rigidbody.rotation;
+        float startSpeed = currentSpeed;
+        float t = 0f;
+        while (t < duration)
+        {
+            float lerpT = t / duration;
+            _rigidbody.position = Vector3.Lerp(startPos, targetPos, lerpT);
+            _rigidbody.rotation = Quaternion.Slerp(startRot, targetRot, lerpT);
+            currentSpeed = Mathf.Lerp(startSpeed, targetSpeed, lerpT);
+            t += Time.fixedDeltaTime;
+            yield return new WaitForFixedUpdate();
+        }
+        _rigidbody.position = targetPos;
+        _rigidbody.rotation = targetRot;
+        currentSpeed = targetSpeed;
+        // Đồng bộ lại buffer và trạng thái sau khi reconcile xong
+        stateBuffer[BufIdx(currentTick)] = new StatePayload { tick = currentTick, position = targetPos, rotation = targetRot, speed = targetSpeed };
+        lastProcessedState = new StatePayload { tick = currentTick, position = targetPos, rotation = targetRot, speed = targetSpeed };
+        isRewinding = false;
     }
 
     [Rpc(SendTo.Server)]
@@ -1040,38 +1158,43 @@ public class CarController : NetworkBehaviour
             pendingInputs[input.tick] = input;
         }
 
-        // Debug.Log($"{GlobalVar.SERVER} {GlobalVar.SERVER_RECEIVE_INPUT} " +
-        //         GlobalVar.GetStringDataList(new []{
-        //             ("tick", $"{input.tick}"),
-        //         })
-        //     );
+        // Debug.Log($"{GlobalVar.SERVER} {GlobalVar.SERVER_RECEIVE_INPUT} ..."); // Đã comment để tránh nhiễu log
     }
 
     public void ApplyState(StatePayload state)
     {
         _rigidbody.position = state.position;
         _rigidbody.rotation = state.rotation;
-        currentSpeed = state.speed;
+        float maxSpd = Mathf.Max(10f, maxSpeed * 1.2f);
+        currentSpeed = Mathf.Clamp(state.speed, -maxSpd, maxSpd);
     }
 
-    // Sửa lại hàm GetStateOfCar để hỗ trợ ép kiểu Tick khi Rewind
+    // Thêm tham số overwriteTick để phục vụ cho lúc Rewind
     public StatePayload GetStateOfCar(int overwriteTick = -1)
     {
-        int currentTick = overwriteTick > 0 ? overwriteTick : lastProcessedTick;
-
-        // Đảm bảo nếu không có NetworkManager thì trả về 0, nhưng ưu tiên overwriteTick
-        if (overwriteTick <= 0 && NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
-        {
-            currentTick = lastProcessedTick; // Hoặc NetworkManager.Singleton.ServerTime.Tick tùy logic của bạn, nhưng lastProcessedTick chuẩn hơn cho State
-        }
+        // Lấy đúng Tick đang được xử lý (tránh lỗi nhầm tem thời gian)
+        int tickToUse = overwriteTick > 0 ? overwriteTick : lastProcessedTick;
 
         return new StatePayload()
         {
-            tick = currentTick, // Sử dụng tick đã được xác định rõ ràng
-            position = transform.position,
-            rotation = transform.rotation,
+            tick = tickToUse,
+            
+            // SỬA Ở ĐÂY: Bắt buộc đọc từ _rigidbody để có dữ liệu chính xác tức thời!
+            position = _rigidbody.position, 
+            rotation = _rigidbody.rotation, 
+            
             speed = currentSpeed
         };
+    }
+
+    // Hàm này được gọi bởi RaceManager sau khi Rewind xong
+    public void SyncAfterRewind(int tick)
+    {
+        lastProcessedTick = tick; // Đồng bộ đồng hồ hiện tại
+        
+        // Dọn sạch kho gói tin cũ để xe KHÔNG bị thực thi kép (Double Execution)
+        var oldTicks = pendingInputs.Keys.Where(k => k <= tick).ToList();
+        foreach (var t in oldTicks) pendingInputs.Remove(t);
     }
 
     #endregion

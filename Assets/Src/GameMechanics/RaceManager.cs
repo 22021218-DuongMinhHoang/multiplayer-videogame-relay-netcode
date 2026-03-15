@@ -201,8 +201,8 @@ public class RaceManager : MonoBehaviour
         }
 
         var sortedPlayerData = playerData.Any(p => p.Item1.FinishRawTime != 0f) ?
-            playerData.OrderByDescending(t => t.Item3)
-                .ThenByDescending(t => t.Item2).ToList() : 
+            playerData.OrderBy(t => t.Item3)
+                .ThenByDescending(t => t.Item2).ToList() :
             playerData.OrderByDescending(t => t.Item2).ToList();
         
         var sortPlayers = sortedPlayerData.Select(t => t.Item1).ToArray();
@@ -328,10 +328,10 @@ public class RaceManager : MonoBehaviour
 
     [Header("Lag Compensation Settings")]
     [SerializeField] private bool ENABLE_DEBUG_LOG = true; 
-    [SerializeField] int bufferSize = 4000;
+    [SerializeField] int bufferSize = 8192; // Tăng bufferSize để tránh ghi đè sớm
     float rewindCooldownTime = 0.5f; // Rút ngắn cooldown để phản ứng va chạm nhanh hơn
     private SortedDictionary<int, StatePayload[]> stateBufferDict = new();
-    private SortedDictionary<int, InputPayload[]> inputBufferDict = new();
+    public SortedDictionary<int, InputPayload[]> inputBufferDict = new();
     int serverTick = 1;
     float rewindCooldownCounter = 0;
     List<int> rewindTickQueue = new();
@@ -355,11 +355,28 @@ public class RaceManager : MonoBehaviour
 
         inputBufferDict[tick][id] = input;
 
-        if (Mathf.Abs(serverTick - tick) <= 100 && input.isCollide)
-        {
-            collideTickQueue.Add(tick);
+        // THAY THẾ ĐOẠN KIỂM TRA ĐIỀU KIỆN REWIND CŨ BẰNG ĐOẠN NÀY:
+        CarController car = null;
+        foreach (var p in players) {
+            if (p.ID == id) {
+                car = p.GetCarController;
+                break;
+            }
         }
-            
+
+        if (car != null)
+        {
+            int carTick = car.GetLastProcessedTick();
+            // Chỉ Rewind nếu gói tin gửi đến bị trễ so với thời gian hiện tại của xe
+            if (Mathf.Abs(carTick - tick) <= 100)
+            {
+                if (input.isCollide)
+                {
+                    if (!collideTickQueue.Contains(tick)) 
+                        collideTickQueue.Add(tick);
+                }
+            }
+        }
     }
 
     public void PendState(int id, StatePayload state)
@@ -395,9 +412,27 @@ public class RaceManager : MonoBehaviour
     {
         bool canRewind = false;
 
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+
+        int networkTick = NetworkManager.Singleton != null ? NetworkManager.Singleton.ServerTime.Tick : 0;
+        // Chỉ kiểm tra lệch tick khi cả hai tick đã lớn hơn 1 (tránh cảnh báo ảo khi khởi động)
+        if (serverTick > 1 && networkTick > 1)
         {
-            serverTick = NetworkManager.Singleton.ServerTime.Tick;
+            int tickDiff = Mathf.Abs(serverTick - networkTick);
+            if (tickDiff > 10 && tickDiff < 100) // Ngưỡng lệch vừa phải, cảnh báo
+            {
+                Debug.LogWarning($"[RaceManager] Cảnh báo: Tick local/server lệch {tickDiff} (local={serverTick}, server={networkTick})");
+            }
+            else if (tickDiff >= 100) // Nếu lệch quá lớn, tự đồng bộ lại
+            {
+                Debug.LogWarning($"[RaceManager] Tick local/server lệch quá lớn ({tickDiff}), tự đồng bộ lại: local={serverTick}, server={networkTick}");
+                serverTick = networkTick;
+            }
+        }
+
+        if (serverTick == 1 && networkTick > 0) {
+            serverTick = networkTick; // Lấy mốc ban đầu
+        } else if (serverTick > 1 || networkTick > 0) {
+            serverTick++; // Tự tăng 50 lần/giây
         }
 
         List<CarController> cars = new();
@@ -444,10 +479,10 @@ public class RaceManager : MonoBehaviour
                 triggerReason += " [Capped at 30 Ticks]";
             }
 
-            if (ENABLE_DEBUG_LOG) 
-                Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
+            // if (ENABLE_DEBUG_LOG) 
+            //     Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
 
-            RewindServerSingleScene(rewindTick);
+            //RewindServerSingleScene(rewindTick);
         } 
 
         for (int i = 0; i < cars.Count; i++)
@@ -465,6 +500,7 @@ public class RaceManager : MonoBehaviour
     }
     private void RewindServerSingleScene(int tick)
     {
+        // Debug.Log($"<color=red>[REWIND]</color> Máy chủ bị ép tua về Tick {tick} (Hiện tại đang là {serverTick}). Lý do: Bị lỡ gói tin hoặc va chạm!");
         if (!isRewinding && inputBufferDict.ContainsKey(tick) && stateBufferDict.ContainsKey(tick))
         {
             isRewinding = true;
@@ -483,7 +519,6 @@ public class RaceManager : MonoBehaviour
                     if (carReal != null && firstState[id].tick != 0)
                     {
                         carReal.ApplyState(firstState[id]);
-                        
                     }
                 }
 
@@ -493,16 +528,25 @@ public class RaceManager : MonoBehaviour
                 int lastTick = serverTick;
                 int simulatedFrames = 0;
 
-                if (ENABLE_DEBUG_LOG) 
-                    Debug.Log($"<color=cyan>[Lag Compensation]</color> Bắt đầu Fast-Forward (Resimulate) từ Tick {tickToProcess} đến {lastTick}...");
-
+                // Lưu input gần nhất cho mỗi player
                 InputPayload[] lastInputs = new InputPayload[4];
-                for (int id = 0; id < 4; id++) 
+                for (int id = 0; id < 4; id++)
                 {
-                    if (inputBufferDict.ContainsKey(tick) && inputBufferDict[tick][id].tick != 0)
-                        lastInputs[id] = inputBufferDict[tick][id];
-                    else
-                        lastInputs[id] = new InputPayload { tick = tickToProcess }; 
+                    // Tìm input gần nhất về trước tick này
+                    int searchTick = tick;
+                    while (searchTick >= 0)
+                    {
+                        if (inputBufferDict.ContainsKey(searchTick) && inputBufferDict[searchTick][id].tick != 0)
+                        {
+                            lastInputs[id] = inputBufferDict[searchTick][id];
+                            break;
+                        }
+                        searchTick--;
+                    }
+                    if (lastInputs[id].tick == 0)
+                    {
+                        lastInputs[id] = new InputPayload { tick = tickToProcess };
+                    }
                 }
 
                 while (tickToProcess <= lastTick)
@@ -520,6 +564,7 @@ public class RaceManager : MonoBehaviour
                             }
                             else
                             {
+                                // Giữ lại input gần nhất
                                 lastInputs[id].tick = tickToProcess;
                             }
 
@@ -529,8 +574,14 @@ public class RaceManager : MonoBehaviour
 
                     Physics.Simulate(Time.fixedDeltaTime);
 
+                    // Giới hạn buffer size
                     if (!stateBufferDict.ContainsKey(tickToProcess))
                     {
+                        if (stateBufferDict.Count >= bufferSize)
+                        {
+                            int minKey = stateBufferDict.Keys.First();
+                            stateBufferDict.Remove(minKey);
+                        }
                         stateBufferDict.Add(tickToProcess, new StatePayload[4]);
                     }
 
@@ -538,7 +589,7 @@ public class RaceManager : MonoBehaviour
                     {
                         CarController carReal = players[i].GetCarController;
                         int id = players[i].ID;
-                        if (carReal != null) 
+                        if (carReal != null)
                             stateBufferDict[tickToProcess][id] = carReal.GetStateOfCar(tickToProcess);
                     }
 
@@ -546,9 +597,19 @@ public class RaceManager : MonoBehaviour
                     simulatedFrames++;
                 }
 
-                if (ENABLE_DEBUG_LOG) 
-                    Debug.Log($"<color=green>[Lag Compensation]</color> Rewind hoàn tất! Đã chạy lại {simulatedFrames} frames mượt mà.");
+                for (int i = 0; i < players.Count; i++)
+                {
+                    CarController carReal = players[i].GetCarController;
+                    if (carReal != null)
+                    {
+                        carReal.SyncAfterRewind(lastTick);
+                    }
+                }
 
+                // if (ENABLE_DEBUG_LOG)
+                //     Debug.Log($"<color=green>[Lag Compensation]</color> Rewind hoàn tất! Đã chạy lại {simulatedFrames} frames mượt mà.");
+
+                // Đảm bảo clear queue sau khi rewind
                 collideTickQueue.Clear();
                 rewindTickQueue.Clear();
             }
