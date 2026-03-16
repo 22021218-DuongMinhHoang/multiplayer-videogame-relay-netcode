@@ -26,6 +26,7 @@ public class InputController : NetworkBehaviour
     
     public void OnMove(InputAction.CallbackContext context)
     {
+        if (_carController == null) return;
         Vector2 input = context.ReadValue<Vector2>();
         _carController.inputAcceleration = input.y;
         _carController.inputSteering = input.x;
@@ -35,12 +36,14 @@ public class InputController : NetworkBehaviour
     [Rpc(SendTo.Server)]
     private void OnMoveRpc(Vector2 input)
     {
+        if (_carController == null) return;
         _carController.inputAcceleration = input.y;
         _carController.inputSteering = input.x;
     }
 
     public void OnBrake(InputAction.CallbackContext context)
     {
+        if (_carController == null) return;
         float input = context.ReadValue<float>();
         _carController.inputBrake = input;
         //OnBrakeRpc(input);

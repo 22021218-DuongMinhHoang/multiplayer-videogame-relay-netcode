@@ -377,7 +377,7 @@ public class UIManager : MonoBehaviour
         if (playerCar != null)
         {
             var controller = playerCar.GetComponent<CarController>();
-            if (controller != null) controller.SetDRMode((DeadReckoningMode)index);
+            //if (controller != null) controller.SetDRMode((DeadReckoningMode)index);
         }
         ResetLocalMetrics();
     }

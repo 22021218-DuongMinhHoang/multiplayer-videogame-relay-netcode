@@ -467,11 +467,9 @@ MonoBehaviour:
   UseDeadReckoning: 1
   currentDRMode: 2
   currentCorrectionMode: 0
-  _useCubicSpline: 0
-  _useAdaptiveThreshold: 1
-  _useTimeSync: 1
   jerkCounter:
     windowSize: 500
+  visualTransform: {fileID: 8849641098414266214}
 --- !u!114 &6585139506112043527
 MonoBehaviour:
   m_ObjectHideFlags: 0
