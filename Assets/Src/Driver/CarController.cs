@@ -449,17 +449,13 @@ public class CarController : NetworkBehaviour
     private void OnNetworkDataChanged(PosAndRotNetworkData oldVal, PosAndRotNetworkData newVal) {
         if (newVal.Position == Vector3.zero) return;
         
-        // Update dead reckoning system
         deadReckoningSystem.OnServerStateReceived(newVal.Position, newVal.Velocity, newVal.Acceleration, newVal.Timestamp);
         
-        // Record server state in reconciliation
         serverReconciliation.RecordServerState(newVal.Tick, newVal.Position, Quaternion.Euler(newVal.Rotation), newVal.Speed);
         
-        // Record error metrics
         float error = Vector3.Distance(transform.position, newVal.Position);
         serverReconciliation.RecordError(error);
         
-        // Update UI
         if (UIManager.Instance != null) 
         { 
             try 
@@ -528,45 +524,34 @@ public class CarController : NetworkBehaviour
     
     private void ProcessClientPrediction()
     {
-        // Khởi tạo NetworkTimer nếu chưa
         if (networkTimer == null)
             networkTimer = new NetworkTimer(TICK_RATE);
         
-        // Check if we should tick (networkTimer is already updated in Update())
         if (!networkTimer.ShouldTick())
             return;
         
         int currentTick = networkTimer.CurrentTick;
         
-        // Tạo input payload
         InputPayload inputPayload = inputManager.CreateInputPayload(inputAcceleration, inputBrake, inputSteering, CheckCollision());
         inputPayload.tick = currentTick;
         
-        // Lưu input vào buffer
         clientInputBuffer.Add(inputPayload, currentTick);
         inputManager.UpdateLastKnownInput(inputPayload);
         
-        // Simulate movement
         StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
         predicted.tick = currentTick;
         clientStateBuffer.Add(predicted, currentTick);
         
-        // Apply movement
         float clampedSpeed = carMovement.ClampSpeed(predicted.speed);
         _rigidbody.MovePosition(predicted.position);
         _rigidbody.MoveRotation(predicted.rotation);
         currentSpeed = clampedSpeed;
         
-        // Submit input tới server
         SubmitInputServerRpc(inputPayload);
         
-        // Handle reconciliation
         HandleServerReconciliation();
     }
 
-    /// <summary>
-    /// Xử lý tick client với NetworkTimer - Chạy lặp đi lặp lại để đảm bảo vận tốc tick ổn định
-    /// </summary>
     private void HandleClientTick()
     {
         if (!IsClient || !IsOwner || _rigidbody.isKinematic) return;
@@ -589,7 +574,6 @@ public class CarController : NetworkBehaviour
         predicted.tick = currentTick;
         clientStateBuffer.Add(predicted, currentTick);
         
-        // ÁP DỤNG DỰ ĐOÁN NGAY VÀO RIGIDBODY
         _rigidbody.MovePosition(predicted.position);
         _rigidbody.MoveRotation(predicted.rotation);
         currentSpeed = carMovement.ClampSpeed(predicted.speed);
@@ -597,48 +581,37 @@ public class CarController : NetworkBehaviour
         HandleServerReconciliation();
     }
 
-    /// <summary>
-    /// Xử lý Server Reconciliation: Phát hiện sai lệch và rewind/replay
-    /// </summary>
     private void HandleServerReconciliation()
     {
         StatePayload latestServerState = serverReconciliation.LatestServerState;
         if (latestServerState.tick == 0 || latestServerState.position == Vector3.zero)
             return;
         
-        // Tính error
         var (positionError, rotationError) = serverReconciliation.CalculateErrors(
             new StatePayload { position = _rigidbody.position, rotation = _rigidbody.rotation, speed = currentSpeed, tick = networkTimer.CurrentTick },
             latestServerState
         );
         
-        // Ghi nhận error metrics
         serverReconciliation.RecordError(positionError);
         
-        // Kiểm tra xem có cần reconcile không
         if (serverReconciliation.ShouldReconcile(positionError, rotationError, currentSpeed, latestServerState.speed))
         {
-            // 1. NGAY LẬP TỨC giật (Snap) Rigidbody về vị trí đúng của Server
             _rigidbody.position = latestServerState.position;
             _rigidbody.rotation = latestServerState.rotation;
             currentSpeed = latestServerState.speed;
             
-            // 2. Chạy lại (Replay) toàn bộ input từ lúc bị sai đến hiện tại
             int tickToReplay = latestServerState.tick + 1;
             while (tickToReplay <= networkTimer.CurrentTick)
             {
                 InputPayload pastInput = clientInputBuffer.Get(tickToReplay);
                 
-                // Tính toán lại vị trí cho tick này
                 StatePayload stepState = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, pastInput, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
                 stepState.tick = tickToReplay;
                 
-                // Cập nhật ngay vào Rigidbody
                 _rigidbody.position = stepState.position;
                 _rigidbody.rotation = stepState.rotation;
                 currentSpeed = carMovement.ClampSpeed(stepState.speed);
                 
-                // Lưu đè lại vào buffer cho đúng
                 clientStateBuffer.Add(stepState, tickToReplay);
                 tickToReplay++;
             }
@@ -663,10 +636,8 @@ public class CarController : NetworkBehaviour
         float tempSpeed = currentSpeed;
         bool hasProcessed = false;
         
-        // Clean up old inputs
         inputManager.RemoveOldPendingInputs(lastProcessedTick);
         
-        // Process pending inputs (max 2 inputs per frame cho smooth)
         int maxProcess = inputManager.PendingInputCount > 2 ? 2 : 1;
         for (int i = 0; i < maxProcess && inputManager.HasPendingInputs; i++)
         {
@@ -725,9 +696,6 @@ public class CarController : NetworkBehaviour
         _rigidbody.MoveRotation(Quaternion.Slerp(transform.rotation, targetRot, Time.fixedDeltaTime * 10f));
     }
     
-    /// <summary>
-    /// Check collision phía trước xe
-    /// </summary>
     private bool CheckCollision()
     {
         Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
@@ -753,10 +721,6 @@ public class CarController : NetworkBehaviour
         _rigidbody.rotation = state.rotation;
         currentSpeed = state.speed;
     }
-
-    // public void FixedUpdate() {
-        
-    // }
 
     public void ServerSendState()
     {
@@ -788,7 +752,7 @@ public class CarController : NetworkBehaviour
         if (!_rigidbody.isKinematic)
         {
             _networkData.Value = new PosAndRotNetworkData() {
-                Position = state.position, // Lấy thẳng tọa độ tính toán từ Payload
+                Position = state.position,
                 Rotation = state.rotation.eulerAngles,
                 Velocity = _rigidbody.velocity,
                 Timestamp = Time.time,
@@ -800,20 +764,17 @@ public class CarController : NetworkBehaviour
 
     public void Update()
     {
-        // Cập nhật NetworkTimer
         if (IsSpawned && networkTimer != null)
         {
             networkTimer.Update(Time.deltaTime);
         }
 
-        // Làm mượt hình dáng hiển thị của chiếc xe
         if (visualTransform != null && !_rigidbody.isKinematic)
         {
             visualTransform.position = Vector3.Lerp(visualTransform.position, transform.position, Time.deltaTime * 15f);
             visualTransform.rotation = Quaternion.Slerp(visualTransform.rotation, transform.rotation, Time.deltaTime * 15f);
         }
 
-        // Cập nhật UI tốc độ trên Server
         if (IsServer && IsSpawned)
         {
             var iSpeed = Mathf.FloorToInt(_rigidbody.velocity.magnitude);
@@ -869,19 +830,10 @@ public class CarController : NetworkBehaviour
         return carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f);
     }
 
-    //Server Reconciliation
-    void ProcessOldHandleServerReconciliation()
-    {
-        // [DEPRECATED - Replaced with new HandleServerReconciliation using CircularBuffer and NetworkTimer]
-        // This method has been replaced by the optimized version that uses instant snap + replay
-    }
-
-    // Làm mượt reconcile bằng coroutine
-    // Lerp reconcile và đồng bộ lại buffer, lastProcessedState, isRewinding
     [System.Obsolete("Use HandleServerReconciliation instead")]
     private IEnumerator SmoothReconcileLerpWithBufferSync(Vector3 targetPos, Quaternion targetRot, float targetSpeed, float duration)
     {
-        yield return null; // Deprecated
+        yield return null;
     }
 
     [Rpc(SendTo.Server)]

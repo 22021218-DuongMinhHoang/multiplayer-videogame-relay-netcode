@@ -3,30 +3,23 @@ using CustomTypes;
 using Unity.Netcode;
 using UnityEngine;
 
-/// <summary>
-/// Quản lý dead reckoning logic: dự đoán movement khi chờ server update
-/// </summary>
 public class DeadReckoningSystem
 {
     public enum DeadReckoningMode { None, Linear, Quadratic }
     public enum CorrectionMode { SmoothDamp, Lerp }
     
-    // Trạng thái server
     private Vector3 serverPos = Vector3.zero;
     private Vector3 serverVel = Vector3.zero;
     private Vector3 serverAcc = Vector3.zero;
     private Vector3 prevServerVel = Vector3.zero;
     private float lastServerRecvTime = 0f;
     
-    // Dự đoán hiện tại
     private Vector3 targetPos = Vector3.zero;
     private Vector3 vel = Vector3.zero;
     
-    // Đồng bộ thời gian nếu cần
     private float timeOffset = 0f;
     private const float SYNC_ALPHA = 0.05f;
     
-    // Cubic spline (nếu enable)
     private Vector3 p0, p1, t0, t1;
     private float splineTimer = 0f;
     
@@ -93,9 +86,6 @@ public class DeadReckoningSystem
         ResetSplineState(serverPos);
     }
     
-    /// <summary>
-    /// Reset spline state khi nhận packet hoặc respawn
-    /// </summary>
     public void ResetSplineState(Vector3 pos)
     {
         p0 = pos;
@@ -108,9 +98,6 @@ public class DeadReckoningSystem
         targetPos = pos;
     }
     
-    /// <summary>
-    /// Tính toán target position dựa trên dead reckoning mode
-    /// </summary>
     public Vector3 CalculateTargetPosition(float smoothInterpolationTime)
     {
         float now = Time.time;
@@ -137,18 +124,12 @@ public class DeadReckoningSystem
         return predicted;
     }
     
-    /// <summary>
-    /// Tính velocity cho smooth damp
-    /// </summary>
     public Vector3 SmoothDampPosition(Vector3 currentPos, Vector3 targetPosParam, Vector3 velocity, float smoothTime, float deltaTime)
     {
         targetPos = targetPosParam;
         return Vector3.SmoothDamp(currentPos, targetPos, ref vel, smoothTime, float.PositiveInfinity, deltaTime);
     }
     
-    /// <summary>
-    /// Lerp position
-    /// </summary>
     public Vector3 LerpPosition(Vector3 currentPos, Vector3 targetPosParam, float smoothTime, float deltaTime)
     {
         targetPos = targetPosParam;
@@ -156,25 +137,16 @@ public class DeadReckoningSystem
         return Vector3.Lerp(currentPos, targetPos, t);
     }
     
-    /// <summary>
-    /// Set dead reckoning mode
-    /// </summary>
     public void SetDRMode(DeadReckoningMode mode)
     {
         currentDRMode = mode;
     }
     
-    /// <summary>
-    /// Set correction mode
-    /// </summary>
     public void SetCorrectionMode(int index)
     {
         currentCorrectionMode = (CorrectionMode)index;
     }
     
-    /// <summary>
-    /// Lấy jitter estimate từ packet intervals
-    /// </summary>
     public float GetJitterEstimate()
     {
         if (packetIntervals.Count <= 1) return 0f;
@@ -189,12 +161,9 @@ public class DeadReckoningSystem
             sumSq += (interval - avg) * (interval - avg);
         
         float stdDev = Mathf.Sqrt(sumSq / (packetIntervals.Count - 1));
-        return stdDev * 1000f; // Convert to ms
+        return stdDev * 1000f;
     }
     
-    /// <summary>
-    /// Reset dead reckoning system
-    /// </summary>
     public void Reset(Vector3 initialPos)
     {
         serverPos = initialPos;

@@ -3,12 +3,8 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
-/// Quản lý server reconciliation: phát hiện sai lệch và rewind/fast-forward
-/// </summary>
 public class ServerReconciliation
 {
-    // Reconciliation thresholds
     private const float RECONCILE_POS_THRESHOLD = 1.5f;
     private const float RECONCILE_ROT_THRESHOLD = 1.0f;
     private const float RECONCILE_LERP_TIME = 0.2f;
@@ -30,9 +26,6 @@ public class ServerReconciliation
     public double AverageExportError => aeeCount > 0 ? aeeSum / aeeCount : 0.0;
     public float HitPercentage => aeeCount > 0 ? (hitCount * 100f / aeeCount) : 0f;
     
-    /// <summary>
-    /// Ghi nhận server state mới
-    /// </summary>
     public void RecordServerState(int tick, Vector3 pos, Quaternion rot, float speed)
     {
         latestServerState = new StatePayload
@@ -44,9 +37,6 @@ public class ServerReconciliation
         };
     }
     
-    /// <summary>
-    /// Tính toán error giữa predicted state và server state
-    /// </summary>
     public (float positionError, float rotationError) CalculateErrors(StatePayload predicted, StatePayload server)
     {
         float posError = Vector3.Distance(server.position, predicted.position);
@@ -54,9 +44,6 @@ public class ServerReconciliation
         return (posError, rotError);
     }
     
-    /// <summary>
-    /// Check nếu cần rewind và reconcile
-    /// </summary>
     public bool ShouldReconcile(float posError, float rotError, float currentSpeed, float serverSpeed)
     {
         bool isNearlyStopped = Mathf.Abs(currentSpeed) < LOW_SPEED_THRESHOLD && 
@@ -67,33 +54,21 @@ public class ServerReconciliation
         return errorsLarge && !isRewinding && !isNearlyStopped;
     }
     
-    /// <summary>
-    /// Check nếu sai số rất lớn (cần snap cứng)
-    /// </summary>
     public bool ShouldHardSnap(float posError, float rotError)
     {
         return posError > RECONCILE_POS_THRESHOLD * 2f || rotError > RECONCILE_ROT_THRESHOLD * 2f;
     }
     
-    /// <summary>
-    /// Bắt đầu rewind
-    /// </summary>
     public void StartRewinding()
     {
         isRewinding = true;
     }
     
-    /// <summary>
-    /// Kết thúc rewind
-    /// </summary>
     public void FinishRewinding()
     {
         isRewinding = false;
     }
     
-    /// <summary>
-    /// Cập nhật last processed state sau rewind xong
-    /// </summary>
     public void UpdateLastProcessedState(int tick, Vector3 pos, Quaternion rot, float speed)
     {
         lastProcessedState = new StatePayload
@@ -105,9 +80,6 @@ public class ServerReconciliation
         };
     }
     
-    /// <summary>
-    /// Ghi nhận error metrics
-    /// </summary>
     public void RecordError(float error)
     {
         aeeSum += error;
@@ -116,9 +88,6 @@ public class ServerReconciliation
             hitCount++;
     }
     
-    /// <summary>
-    /// Reset metrics
-    /// </summary>
     public void ResetMetrics()
     {
         aeeSum = 0.0;
@@ -126,9 +95,6 @@ public class ServerReconciliation
         hitCount = 0;
     }
     
-    /// <summary>
-    /// Reset state
-    /// </summary>
     public void Reset()
     {
         latestServerState = new StatePayload();
@@ -136,10 +102,6 @@ public class ServerReconciliation
         isRewinding = false;
         ResetMetrics();
     }
-    
-    /// <summary>
-    /// Kiểm tra nếu latest server state và predicted state giống nhau
-    /// </summary>
     public bool StatesAreEquivalent(StatePayload state1, StatePayload state2)
     {
         if (state1.tick != state2.tick)

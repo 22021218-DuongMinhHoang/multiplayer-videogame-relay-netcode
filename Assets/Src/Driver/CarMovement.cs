@@ -1,8 +1,5 @@
 using UnityEngine;
 
-/// <summary>
-/// Xử lý movement simulation cho xe (arcade style)
-/// </summary>
 public class CarMovement
 {
     // Arcade Movement Settings
@@ -33,9 +30,6 @@ public class CarMovement
         currentSpeed = speed;
     }
     
-    /// <summary>
-    /// Tính toán movement một cách deterministic
-    /// </summary>
     public StatePayload SimulateMovement(
         Vector3 startPos,
         Quaternion startRot,
@@ -96,27 +90,18 @@ public class CarMovement
         };
     }
     
-    /// <summary>
-    /// Clamp speed trong khoảng hợp lệ
-    /// </summary>
     public float ClampSpeed(float speed)
     {
         float maxSpd = Mathf.Max(10f, maxSpeed * 1.2f);
         return Mathf.Clamp(speed, -maxSpd, maxSpd);
     }
     
-    /// <summary>
-    /// Kiểm tra xe có gần như dừng hẳn không
-    /// </summary>
     public bool IsNearlyStopped(float speed, float otherSpeed = 0f)
     {
         const float LOW_SPEED_THRESHOLD = 0.15f;
         return Mathf.Abs(speed) < LOW_SPEED_THRESHOLD && Mathf.Abs(otherSpeed) < LOW_SPEED_THRESHOLD;
     }
     
-    /// <summary>
-    /// Reset speed (cho lúc start/respawn)
-    /// </summary>
     public void ResetSpeed()
     {
         currentSpeed = 0f;

@@ -4,9 +4,6 @@ using System.Linq;
 using Unity.Netcode;
 using UnityEngine;
 
-/// <summary>
-/// Quản lý input: thu thập, buffer, gửi đến server, handle tick
-/// </summary>
 public class InputManager
 {
     private int currentTick = 0;
@@ -31,10 +28,7 @@ public class InputManager
             isCollide = false 
         };
     }
-    
-    /// <summary>
-    /// Cập nhật tick client dựa trên server time (50Hz)
-    /// </summary>
+
     public void UpdateClientTick()
     {
         if (currentTick == 0 && NetworkManager.Singleton != null && NetworkManager.Singleton.ServerTime.Tick > 0)
@@ -47,9 +41,6 @@ public class InputManager
         }
     }
     
-    /// <summary>
-    /// Kiểm tra lệch tick client/server
-    /// </summary>
     public (bool HasWarning, int TickDiff) CheckTickSync()
     {
         if (NetworkManager.Singleton == null || currentTick <= 1)
@@ -63,9 +54,6 @@ public class InputManager
         return (tickDiff >= 10, tickDiff);
     }
     
-    /// <summary>
-    /// Đồng bộ lại tick nếu lệch quá lớn
-    /// </summary>
     public void SyncTickIfNeeded(int serverTick)
     {
         int tickDiff = Mathf.Abs(currentTick - serverTick);
@@ -76,9 +64,6 @@ public class InputManager
         }
     }
     
-    /// <summary>
-    /// Tạo input payload từ input hiện tại
-    /// </summary>
     public InputPayload CreateInputPayload(float inputAcceleration, float inputBrake, float inputSteering, bool isCollide)
     {
         return new InputPayload
@@ -91,17 +76,11 @@ public class InputManager
         };
     }
     
-    /// <summary>
-    /// Lưu input mới nhất được biết (cho jitter buffer)
-    /// </summary>
     public void UpdateLastKnownInput(InputPayload input)
     {
         lastKnownInput = input;
     }
     
-    /// <summary>
-    /// Thêm pending input từ client gửi lên server
-    /// </summary>
     public void AddPendingInput(InputPayload input)
     {
         if (!pendingInputs.ContainsKey(input.tick))
@@ -116,17 +95,10 @@ public class InputManager
         }
     }
     
-    /// <summary>
-    /// Lấy input từ pending inputs (server-side)
-    /// </summary>
     public bool TryGetPendingInput(int tick, out InputPayload input)
     {
         return pendingInputs.TryGetValue(tick, out input);
     }
-    
-    /// <summary>
-    /// Xóa input cũ khỏi pending inputs
-    /// </summary>
     public void RemoveOldPendingInputs(int upToTick)
     {
         var oldTicks = pendingInputs.Keys.Where(k => k <= upToTick).ToList();
@@ -134,9 +106,6 @@ public class InputManager
             pendingInputs.Remove(t);
     }
     
-    /// <summary>
-    /// Kiểm tra xem input có hợp lệ không
-    /// </summary>
     public bool IsInputValid(InputPayload input, int lastProcessedTick)
     {
         if (input.tick < lastProcessedTick - BUFFER_SIZE || input.tick > lastProcessedTick + 600)
@@ -144,9 +113,6 @@ public class InputManager
         return true;
     }
     
-    /// <summary>
-    /// Lấy input cần xử lý tiếp theo (server-side)
-    /// </summary>
     public InputPayload GetNextInputToProcess(int targetTick)
     {
         if (TryGetPendingInput(targetTick, out InputPayload received))
@@ -154,15 +120,11 @@ public class InputManager
             return received;
         }
         
-        // Nếu không có input mới, dùng last known input (jitter buffer)
         InputPayload fallback = lastKnownInput;
         fallback.tick = targetTick;
         return fallback;
     }
     
-    /// <summary>
-    /// Reset input manager (cho lúc start/respawn)
-    /// </summary>
     public void Reset()
     {
         currentTick = 0;
@@ -177,14 +139,8 @@ public class InputManager
         };
     }
     
-    /// <summary>
-    /// Kiểm tra nếu pendingInputs có input chờ xử lý
-    /// </summary>
     public bool HasPendingInputs => pendingInputs.Count > 0;
     
-    /// <summary>
-    /// Lấy tick input soonest cần xử lý
-    /// </summary>
     public int GetNextPendingInputTick()
     {
         return pendingInputs.Count > 0 ? pendingInputs.Keys.First() : -1;
