@@ -22,6 +22,8 @@ public class UIManager : MonoBehaviour
     [Header("Menu")] [SerializeField] public GameObject menuCanvas;
     [SerializeField] public TMP_InputField menuNickname;
     [SerializeField] public TMP_InputField menuRoomCode; 
+    [SerializeField] public Slider menuPingSlider; // New: Ping adjustment before hosting
+    [SerializeField] public TMP_Text menuPingDisplay; // Display for ping value
     [SerializeField] public Button menuJoin;
     [SerializeField] public Button menuHost;
 
@@ -61,17 +63,24 @@ public class UIManager : MonoBehaviour
     [SerializeField] public Toggle gameInterpolation; 
     [SerializeField] public Button gameExit;
 
-    // --- DEAD RECKONING UI ---
-    [Header("Dead Reckoning Settings")]
-    [SerializeField] public TMP_Dropdown drAlgorithmDropdown;
-    [SerializeField] public TMP_Dropdown correctionModeDropdown;
-    [SerializeField] public Toggle useCubicSplineToggle;
-    [SerializeField] public Toggle useAdaptiveThresholdToggle;
-    [SerializeField] public Toggle useTimeSyncToggle;
+    // --- NEW NETWORKING FEATURES UI ---
+    [Header("Networking Features")]
+    [SerializeField] public Toggle clientSidePredictionToggle;
+    [SerializeField] public Toggle serverReconciliationToggle;
+    [SerializeField] public Toggle lagCompensationToggle;
 
-    [Header("Additional Metrics")]
-    [SerializeField] public TMP_Text instantError;
-    [SerializeField] public TMP_Text jitterEstimate;
+    [Header("Car Dead Reckoning Toggles")]
+    [SerializeField] public List<Toggle> carDeadReckoningToggles; // List of toggles for each car
+
+    [Header("Dead Reckoning Accuracy List")]
+    [SerializeField] public List<TMP_Text> carAccuracyTexts; // List showing accuracy for each car
+    [SerializeField] public List<TMP_Text> carJerkTexts; // List showing jerk for each car
+
+    [Header("Server Reconciliation Metrics")]
+    [SerializeField] public TMP_Text serverReconciliationAccuracy;
+
+    [Header("Lag Compensation Metrics")]
+    [SerializeField] public TMP_Text collisionCountText;
     
     // --- NETWORK SIMULATOR & BOT UI ---
     [Header("Debug & Simulation")]
@@ -291,30 +300,53 @@ public class UIManager : MonoBehaviour
         gameLapTime.text = "--:--.---";
         gameExit.onClick.AddListener(OnExitClient);
 
+        // Initialize new networking toggles
+        if (clientSidePredictionToggle != null)
+        {
+            clientSidePredictionToggle.onValueChanged.AddListener(OnClientSidePredictionChanged);
+        }
+        if (serverReconciliationToggle != null)
+        {
+            serverReconciliationToggle.onValueChanged.AddListener(OnServerReconciliationChanged);
+        }
+        if (lagCompensationToggle != null)
+        {
+            lagCompensationToggle.onValueChanged.AddListener(OnLagCompensationChanged);
+        }
+
+        // Initialize car dead reckoning toggles
+        if (carDeadReckoningToggles != null)
+        {
+            foreach (var toggle in carDeadReckoningToggles)
+            {
+                toggle.onValueChanged.AddListener(OnCarDeadReckoningToggleChanged);
+            }
+        }
+
         // --- INIT DEAD RECKONING UI ---
-        if (drAlgorithmDropdown != null)
-        {
-            drAlgorithmDropdown.ClearOptions();
-            drAlgorithmDropdown.AddOptions(new List<string> { "None (Lerp)", "Linear (1st Order)", "Quadratic (2nd Order)" });
-            drAlgorithmDropdown.onValueChanged.AddListener(OnDRAlgorithmChanged);
-        }
+        // if (drAlgorithmDropdown != null)
+        // {
+        //     drAlgorithmDropdown.ClearOptions();
+        //     drAlgorithmDropdown.AddOptions(new List<string> { "None (Lerp)", "Linear (1st Order)", "Quadratic (2nd Order)" });
+        //     drAlgorithmDropdown.onValueChanged.AddListener(OnDRAlgorithmChanged);
+        // }
 
-        if (correctionModeDropdown != null)
-        {
-            correctionModeDropdown.ClearOptions();
-            correctionModeDropdown.AddOptions(new List<string> { "SmoothDamp", "Lerp" });
-            correctionModeDropdown.onValueChanged.AddListener(OnCorrectionModeChanged);
-        }
+        // if (correctionModeDropdown != null)
+        // {
+        //     correctionModeDropdown.ClearOptions();
+        //     correctionModeDropdown.AddOptions(new List<string> { "SmoothDamp", "Lerp" });
+        //     correctionModeDropdown.onValueChanged.AddListener(OnCorrectionModeChanged);
+        // }
         
-        if (gameInterpolation != null) 
-        {
-            gameInterpolation.onValueChanged.RemoveAllListeners();
-            gameInterpolation.onValueChanged.AddListener(OnDeadReckoningToggleChanged);
-        }
+        // if (gameInterpolation != null) 
+        // {
+        //     gameInterpolation.onValueChanged.RemoveAllListeners();
+        //     gameInterpolation.onValueChanged.AddListener(OnDeadReckoningToggleChanged);
+        // }
 
-        if (useCubicSplineToggle != null) useCubicSplineToggle.onValueChanged.AddListener((val) => SetImprovementOption("Spline", val));
-        if (useAdaptiveThresholdToggle != null) useAdaptiveThresholdToggle.onValueChanged.AddListener((val) => SetImprovementOption("Adaptive", val));
-        if (useTimeSyncToggle != null) useTimeSyncToggle.onValueChanged.AddListener((val) => SetImprovementOption("TimeSync", val));
+        // if (useCubicSplineToggle != null) useCubicSplineToggle.onValueChanged.AddListener((val) => SetImprovementOption("Spline", val));
+        // if (useAdaptiveThresholdToggle != null) useAdaptiveThresholdToggle.onValueChanged.AddListener((val) => SetImprovementOption("Adaptive", val));
+        // if (useTimeSyncToggle != null) useTimeSyncToggle.onValueChanged.AddListener((val) => SetImprovementOption("TimeSync", val));
         
         // --- NETWORK SIMULATOR ---
         if (pingSlider != null)
@@ -342,9 +374,29 @@ public class UIManager : MonoBehaviour
             botResetButton.onClick.AddListener(OnBotResetClicked);
         }
     }
-    
+
+    private void OnCarDeadReckoningToggleChanged(bool arg0)
+    {
+        throw new NotImplementedException();
+    }
+
+    private void OnLagCompensationChanged(bool arg0)
+    {
+        throw new NotImplementedException();
+    }
+
+    private void OnServerReconciliationChanged(bool arg0)
+    {
+        throw new NotImplementedException();
+    }
+
+    private void OnClientSidePredictionChanged(bool arg0)
+    {
+        throw new NotImplementedException();
+    }
+
     // --- EVENT HANDLERS (WITH RESET METRICS) ---
-    
+
     private void ResetLocalMetrics()
     {
         if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null) return;

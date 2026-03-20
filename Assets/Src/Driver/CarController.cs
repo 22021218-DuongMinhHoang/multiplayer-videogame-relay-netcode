@@ -318,7 +318,10 @@ public class CarController : NetworkBehaviour
     private void ResetStatsRpc() {
         Laps = 0; NetworkPlayer.lastLapPos = 0f; NetworkPlayer.checkpointAchieved = false; NetworkPlayer.RubberBandCoefficient = 1f;
         ResetCalculationMetrics();
-        if (UIManager.Instance != null) { try { UIManager.Instance.averageExportError.text = "0.00"; UIManager.Instance.hitPercentage.text = "0.0%"; UIManager.Instance.jitterEstimate.text = "0ms"; UIManager.Instance.instantError.text = "0.00m"; } catch (Exception) { } }
+        if (UIManager.Instance != null) { try { UIManager.Instance.averageExportError.text = "0.00"; UIManager.Instance.hitPercentage.text = "0.0%"; 
+        // UIManager.Instance.jitterEstimate.text = "0ms";
+        //  UIManager.Instance.instantError.text = "0.00m"; 
+         } catch (Exception) { } }
     }
 
     public void ResetCalculationMetrics()
@@ -462,8 +465,8 @@ public class CarController : NetworkBehaviour
             { 
                 UIManager.Instance.averageExportError.text = $"AEE: {serverReconciliation.AverageExportError:F2}"; 
                 UIManager.Instance.hitPercentage.text = $"Hit: {serverReconciliation.HitPercentage:F1}%"; 
-                UIManager.Instance.jitterEstimate.text = $"Jitter: {deadReckoningSystem.GetJitterEstimate():F0}ms"; 
-                UIManager.Instance.instantError.text = $"Err: {error:F2}m"; 
+                // UIManager.Instance.jitterEstimate.text = $"Jitter: {deadReckoningSystem.GetJitterEstimate():F0}ms"; 
+                // UIManager.Instance.instantError.text = $"Err: {error:F2}m"; 
             } 
             catch {} 
         }
