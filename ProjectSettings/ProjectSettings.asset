@@ -842,11 +842,11 @@ PlayerSettings:
   apiCompatibilityLevel: 6
   activeInputHandler: 2
   windowsGamepadBackendHint: 0
-  cloudProjectId: ea2a45a5-9d3c-493e-8798-3e00b9c8c4f3
+  cloudProjectId: da3aff49-06be-43b7-b0db-2c1e2647f8f6
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
-  projectName: MissileRally
-  organizationId: sen6sion
+  projectName: Missile Rally
+  organizationId: dmhoang
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
   hmiLoadingImage: {fileID: 0}

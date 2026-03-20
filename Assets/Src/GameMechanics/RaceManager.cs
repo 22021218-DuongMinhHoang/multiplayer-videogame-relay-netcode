@@ -459,47 +459,47 @@ public class RaceManager : MonoBehaviour
         // Server side
         if ((NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) && !canRewind) return;
 
-        // if (networkTimer == null)
-        //     networkTimer = new NetworkTimer(TICK_RATE);
+        if (networkTimer == null)
+            networkTimer = new NetworkTimer(TICK_RATE);
         
-        // if (!networkTimer.ShouldTick())
-        //     return;
+        if (!networkTimer.ShouldTick())
+            return;
 
-        // serverTick = networkTimer.CurrentTick;
+        serverTick = networkTimer.CurrentTick;
 
-        // if (rewindCooldownCounter >= rewindCooldownTime)
-        // {
-        //     int rewindTick = -1;
-        //     string triggerReason = "";
+        if (rewindCooldownCounter >= rewindCooldownTime)
+        {
+            int rewindTick = -1;
+            string triggerReason = "";
 
-        //     while (collideTickQueue.Count > 0)
-        //     {
-        //         int tick = collideTickQueue[0];
-        //         collideTickQueue.RemoveAt(0);
+            while (collideTickQueue.Count > 0)
+            {
+                int tick = collideTickQueue[0];
+                collideTickQueue.RemoveAt(0);
 
-        //         if (serverTick - tick <= 100 && serverTick - tick >= 0)
-        //         {
-        //             if (rewindTick == -1 || tick < rewindTick) {
-        //                 rewindTick = tick;
-        //                 triggerReason = "Collision";
-        //             }
-        //         }
-        //     }
+                if (serverTick - tick <= 100 && serverTick - tick >= 0)
+                {
+                    if (rewindTick == -1 || tick < rewindTick) {
+                        rewindTick = tick;
+                        triggerReason = "Collision";
+                    }
+                }
+            }
 
-        //     if (rewindTick >= 0)
-        //     {
-        //         if (serverTick - rewindTick > 30)
-        //         {
-        //             rewindTick = serverTick - 30;
-        //             triggerReason += " [Capped at 30 Ticks]";
-        //         }
+            if (rewindTick >= 0)
+            {
+                if (serverTick - rewindTick > 30)
+                {
+                    rewindTick = serverTick - 30;
+                    triggerReason += " [Capped at 30 Ticks]";
+                }
 
-        //         if (ENABLE_DEBUG_LOG) 
-        //             Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
+                if (ENABLE_DEBUG_LOG) 
+                    Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
 
-        //         RewindServerSingleScene(rewindTick);
-        //     } 
-        // }
+                RewindServerSingleScene(rewindTick);
+            } 
+        }
         
 
         for (int i = 0; i < cars.Count; i++)
