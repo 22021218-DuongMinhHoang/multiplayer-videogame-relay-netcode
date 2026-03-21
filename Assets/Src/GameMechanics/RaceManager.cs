@@ -19,7 +19,7 @@ public class RaceManager : MonoBehaviour
 
     [SerializeField] [HideInInspector] public bool hasFinished;
     [SerializeField] [HideInInspector] public List<NetworkPlayer> waitList = new();
-    [SerializeField] [HideInInspector] public List<NetworkPlayer> players = new();
+    [SerializeField] public List<NetworkPlayer> players = new();
     [SerializeField] [HideInInspector] public CircuitController circuitController;
 
     [SerializeField] [HideInInspector] private NetworkPlayer[] _cachedPos = new NetworkPlayer[APP_CONFIG.GAME.MAX_PLAYERS_PER_ROOM];

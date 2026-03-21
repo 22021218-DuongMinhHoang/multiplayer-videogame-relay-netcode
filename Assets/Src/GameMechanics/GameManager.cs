@@ -176,6 +176,8 @@ public class GameManager : MonoBehaviour
         else if (RACE_STATES.Contains(currentRace)) NumLaps = APP_CONFIG.GAME.LAPS_PER_RACE_EVENT;
 
         State = GameState.Started;
+
+        UIManager.Instance.UpdatePlayerList();
     }
     
     #endregion

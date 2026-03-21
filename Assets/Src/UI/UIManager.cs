@@ -71,6 +71,7 @@ public class UIManager : MonoBehaviour
 
     [Header("Car Dead Reckoning Toggles")]
     [SerializeField] public List<Toggle> carDeadReckoningToggles; // List of toggles for each car
+    [SerializeField] public List<Text> carDeadReckoningLabels;
 
     [Header("Dead Reckoning Accuracy List")]
     [SerializeField] public List<TMP_Text> carAccuracyTexts; // List showing accuracy for each car
@@ -181,6 +182,9 @@ public class UIManager : MonoBehaviour
                 playersHubCanvas.SetActive(true);
                 roomCanvas.SetActive(false);
                 gameCanvas.SetActive(true);
+
+                
+
                 endGameCanvas.SetActive(false);
                 break;
             case AppScreen.EndGame:
@@ -320,9 +324,12 @@ public class UIManager : MonoBehaviour
             for (int i = 0; i < carDeadReckoningToggles.Count; i++)
             {
                 var toggle = carDeadReckoningToggles[i];
-                toggle.onValueChanged.AddListener((enable) => OnCarDeadReckoningToggleChanged(i, enable));
+                int id = i;
+                toggle.onValueChanged.AddListener((enable) => OnCarDeadReckoningToggleChanged(id, enable));
             }
         }
+
+        
 
         // --- INIT DEAD RECKONING UI ---
         // if (drAlgorithmDropdown != null)
@@ -378,9 +385,11 @@ public class UIManager : MonoBehaviour
 
     private void OnCarDeadReckoningToggleChanged(int id, bool enable)
     {
+        if (id < 0 || id >= RaceManager.Instance.players.Count) return;
         var player = RaceManager.Instance.players[id];
         if (player == null) return;
         CarController carController = player.GetCarController;
+        if (carController.IsOwnerCar) return;
         if (carController != null)
         {
             carController.UseDeadReckoning = enable;
@@ -398,6 +407,28 @@ public class UIManager : MonoBehaviour
             if (carController != null && carController.IsOwnerCar)
             {
                 carController.UseLagCompensation = enable;
+            }
+        }
+    }
+
+    public void UpdatePlayerList()
+    {
+        for (int i = 0; i < carDeadReckoningLabels.Count; i++)
+        {
+            var label = carDeadReckoningLabels[i];
+            if (i >= RaceManager.Instance.players.Count)
+            {
+                label.text = "N/A";
+                continue;
+            }
+            var player = RaceManager.Instance.players[i];
+            if (player != null && player.GetCarController != null && player.GetCarController.IsOwnerCar)
+            {
+                label.text = "Player";
+            }
+            else if (player == null)
+            {
+                label.text = "N/A";
             }
         }
     }

@@ -1,8 +1,10 @@
+using System;
 using System.Collections.Generic;
 using CustomTypes;
 using Unity.Netcode;
 using UnityEngine;
 
+[Serializable]
 public class DeadReckoningSystem
 {
     public enum DeadReckoningMode { None, Linear, Quadratic }
