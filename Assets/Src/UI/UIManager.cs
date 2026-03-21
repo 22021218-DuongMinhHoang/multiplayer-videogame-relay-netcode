@@ -317,9 +317,10 @@ public class UIManager : MonoBehaviour
         // Initialize car dead reckoning toggles
         if (carDeadReckoningToggles != null)
         {
-            foreach (var toggle in carDeadReckoningToggles)
+            for (int i = 0; i < carDeadReckoningToggles.Count; i++)
             {
-                toggle.onValueChanged.AddListener(OnCarDeadReckoningToggleChanged);
+                var toggle = carDeadReckoningToggles[i];
+                toggle.onValueChanged.AddListener((enable) => OnCarDeadReckoningToggleChanged(i, enable));
             }
         }
 
@@ -375,24 +376,58 @@ public class UIManager : MonoBehaviour
         }
     }
 
-    private void OnCarDeadReckoningToggleChanged(bool arg0)
+    private void OnCarDeadReckoningToggleChanged(int id, bool enable)
     {
-        throw new NotImplementedException();
+        var player = RaceManager.Instance.players[id];
+        if (player == null) return;
+        CarController carController = player.GetCarController;
+        if (carController != null)
+        {
+            carController.UseDeadReckoning = enable;
+            ResetLocalMetrics();
+        }
     }
 
-    private void OnLagCompensationChanged(bool arg0)
+    private void OnLagCompensationChanged(bool enable)
     {
-        throw new NotImplementedException();
+        var players = RaceManager.Instance.players;
+        foreach (var player in players)
+        {
+            if (player == null) continue;
+            CarController carController = player.GetCarController;
+            if (carController != null && carController.IsOwnerCar)
+            {
+                carController.UseLagCompensation = enable;
+            }
+        }
     }
 
-    private void OnServerReconciliationChanged(bool arg0)
+    private void OnServerReconciliationChanged(bool enable)
     {
-        throw new NotImplementedException();
+        var players = RaceManager.Instance.players;
+        foreach (var player in players)
+        {
+            if (player == null) continue;
+            CarController carController = player.GetCarController;
+            if (carController != null && carController.IsOwnerCar)
+            {
+                carController.UseServerReconciliation = enable;
+            }
+        }
     }
 
-    private void OnClientSidePredictionChanged(bool arg0)
+    private void OnClientSidePredictionChanged(bool enable)
     {
-        throw new NotImplementedException();
+        var players = RaceManager.Instance.players;
+        foreach (var player in players)
+        {
+            if (player == null) continue;
+            CarController carController = player.GetCarController;
+            if (carController != null && carController.IsOwnerCar)
+            {
+                carController.UseClientSidePrediction = enable;
+            }
+        }
     }
 
     // --- EVENT HANDLERS (WITH RESET METRICS) ---

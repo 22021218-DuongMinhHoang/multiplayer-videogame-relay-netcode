@@ -8142,7 +8142,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!224 &625342775
 RectTransform:
   m_ObjectHideFlags: 0
@@ -17727,8 +17727,8 @@ MonoBehaviour:
   - {fileID: 0}
   _debugSpheres: []
   _debugRaceOrder: 
+  ENABLE_DEBUG_LOG: 1
   bufferSize: 10000
-  envBound: {fileID: 737063238}
 --- !u!1 &1405243406
 GameObject:
   m_ObjectHideFlags: 0
@@ -20488,6 +20488,8 @@ MonoBehaviour:
   menuCanvas: {fileID: 553348977}
   menuNickname: {fileID: 743290906}
   menuRoomCode: {fileID: 1684864559}
+  menuPingSlider: {fileID: 0}
+  menuPingDisplay: {fileID: 0}
   menuJoin: {fileID: 1114575351}
   menuHost: {fileID: 1644817744}
   loadCanvas: {fileID: 1429123008}
@@ -20526,13 +20528,14 @@ MonoBehaviour:
   gameRespawn: {fileID: 223974228}
   gameInterpolation: {fileID: 846864274}
   gameExit: {fileID: 1869411816}
-  drAlgorithmDropdown: {fileID: 662553396}
-  correctionModeDropdown: {fileID: 1644283758}
-  useCubicSplineToggle: {fileID: 598248602}
-  useAdaptiveThresholdToggle: {fileID: 214974110}
-  useTimeSyncToggle: {fileID: 885682337}
-  instantError: {fileID: 692379758}
-  jitterEstimate: {fileID: 1809014456}
+  clientSidePredictionToggle: {fileID: 0}
+  serverReconciliationToggle: {fileID: 0}
+  lagCompensationToggle: {fileID: 0}
+  carDeadReckoningToggles: []
+  carAccuracyTexts: []
+  carJerkTexts: []
+  serverReconciliationAccuracy: {fileID: 0}
+  collisionCountText: {fileID: 0}
   pingSlider: {fileID: 1531609229}
   pingDisplay: {fileID: 517528969}
   enableSimToggle: {fileID: 338491456}

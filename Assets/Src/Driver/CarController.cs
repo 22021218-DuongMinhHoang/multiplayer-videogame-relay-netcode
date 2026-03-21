@@ -181,6 +181,11 @@ public class CarController : NetworkBehaviour
     private float waypointThreshold = 5.0f;
 
     public bool UseDeadReckoning = true;
+    public bool UseServerReconciliation = true;
+    public bool UseClientSidePrediction = true;
+    public bool UseLagCompensation = true;
+
+    public bool IsOwnerCar => IsOwner;
 
     [Header("Dead Reckoning Configuration")]
     [SerializeField] private DeadReckoningSystem.DeadReckoningMode currentDRMode = DeadReckoningSystem.DeadReckoningMode.Quadratic;
@@ -454,7 +459,19 @@ public class CarController : NetworkBehaviour
         
         deadReckoningSystem.OnServerStateReceived(newVal.Position, newVal.Velocity, newVal.Acceleration, newVal.Timestamp);
         
-        serverReconciliation.RecordServerState(newVal.Tick, newVal.Position, Quaternion.Euler(newVal.Rotation), newVal.Speed);
+        if (UseServerReconciliation)
+        {
+            serverReconciliation.RecordServerState(newVal.Tick, newVal.Position, Quaternion.Euler(newVal.Rotation), newVal.Speed);
+        }
+        else
+        {
+            if (IsClient && !IsOwner)
+            {
+                transform.position = newVal.Position;
+                transform.rotation = Quaternion.Euler(newVal.Rotation);
+                currentSpeed = newVal.Speed;
+            }
+        }
         
         float error = Vector3.Distance(transform.position, newVal.Position);
         serverReconciliation.RecordError(error);
@@ -540,52 +557,60 @@ public class CarController : NetworkBehaviour
         
         clientInputBuffer.Add(inputPayload, currentTick);
         inputManager.UpdateLastKnownInput(inputPayload);
+
+        if (UseClientSidePrediction)
+        {
+            StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+            predicted.tick = currentTick;
+            clientStateBuffer.Add(predicted, currentTick);
+            
+            float clampedSpeed = carMovement.ClampSpeed(predicted.speed);
+            _rigidbody.MovePosition(predicted.position);
+            _rigidbody.MoveRotation(predicted.rotation);
+            currentSpeed = clampedSpeed;
+        }
+
         
-        StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
-        predicted.tick = currentTick;
-        clientStateBuffer.Add(predicted, currentTick);
-        
-        float clampedSpeed = carMovement.ClampSpeed(predicted.speed);
-        _rigidbody.MovePosition(predicted.position);
-        _rigidbody.MoveRotation(predicted.rotation);
-        currentSpeed = clampedSpeed;
         
         SubmitInputServerRpc(inputPayload);
         
         HandleServerReconciliation();
     }
 
-    private void HandleClientTick()
-    {
-        if (!IsClient || !IsOwner || _rigidbody.isKinematic) return;
+    // private void HandleClientTick()
+    // {
+    //     if (!IsClient || !IsOwner || _rigidbody.isKinematic) return;
         
-        int currentTick = networkTimer.CurrentTick;
+    //     int currentTick = networkTimer.CurrentTick;
         
-        InputPayload inputPayload = new InputPayload()
-        {
-            tick = currentTick,
-            inputAcceleration = inputAcceleration,
-            inputSteering = inputSteering,
-            inputBrake = inputBrake,
-            isCollide = CheckCollision()
-        };
+    //     InputPayload inputPayload = new InputPayload()
+    //     {
+    //         tick = currentTick,
+    //         inputAcceleration = inputAcceleration,
+    //         inputSteering = inputSteering,
+    //         inputBrake = inputBrake,
+    //         isCollide = CheckCollision()
+    //     };
         
-        clientInputBuffer.Add(inputPayload, currentTick);
-        SubmitInputServerRpc(inputPayload);
+    //     clientInputBuffer.Add(inputPayload, currentTick);
+    //     SubmitInputServerRpc(inputPayload);
         
-        StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
-        predicted.tick = currentTick;
-        clientStateBuffer.Add(predicted, currentTick);
+    //     StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+    //     predicted.tick = currentTick;
+    //     clientStateBuffer.Add(predicted, currentTick);
         
-        _rigidbody.MovePosition(predicted.position);
-        _rigidbody.MoveRotation(predicted.rotation);
-        currentSpeed = carMovement.ClampSpeed(predicted.speed);
+    //     _rigidbody.MovePosition(predicted.position);
+    //     _rigidbody.MoveRotation(predicted.rotation);
+    //     currentSpeed = carMovement.ClampSpeed(predicted.speed);
         
-        HandleServerReconciliation();
-    }
+    //     HandleServerReconciliation();
+    // }
 
     private void HandleServerReconciliation()
     {
+        if (!UseServerReconciliation)
+            return;
+
         StatePayload latestServerState = serverReconciliation.LatestServerState;
         if (latestServerState.tick == 0 || latestServerState.position == Vector3.zero)
             return;
@@ -701,6 +726,7 @@ public class CarController : NetworkBehaviour
     
     private bool CheckCollision()
     {
+        if (!UseLagCompensation) return false;
         Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
         RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
         
