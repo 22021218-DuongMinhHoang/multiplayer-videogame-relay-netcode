@@ -538,14 +538,15 @@ public class UIManager : MonoBehaviour
         }
     }
 
-    private void OnPingSliderChanged(float delay)
+    private void OnPingSliderChanged(float ping)
     {
-        if (enableSimToggle != null && !enableSimToggle.isOn) return;
+        //if (enableSimToggle != null && !enableSimToggle.isOn) return;
         var transport = NetworkManager.Singleton.NetworkConfig.NetworkTransport as UnityTransport;
         if (transport != null) {
+            float delay = ping / 2f;
             int jitter = (int)(delay * 0.1f); 
             transport.SetDebugSimulatorParameters(packetDelay: (int)delay, packetJitter: jitter, dropRate: 0);
-            if(pingDisplay) pingDisplay.text = $"Sim Latency: {(int)delay}ms (RTT: {(int)delay * 2}ms)";
+            if(pingDisplay) pingDisplay.text = $"Ping: {(int)ping}ms (Jitter: {jitter}ms)";
         }
     }
 
