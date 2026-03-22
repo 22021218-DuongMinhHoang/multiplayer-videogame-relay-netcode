@@ -20,6 +20,7 @@ public class DeadReckoningSystem
     private Vector3 vel = Vector3.zero;
     
     private float timeOffset = 0f;
+    private bool timeOffsetInitialized = false;
     private const float SYNC_ALPHA = 0.05f;
     
     private Vector3 p0, p1, t0, t1;
@@ -41,17 +42,19 @@ public class DeadReckoningSystem
     public Vector3 TargetPos => targetPos;
     public Vector3 Vel => vel;
     
-    /// <summary>
-    /// Reset trạng thái dead reckoning khi nhận packet mới từ server
-    /// </summary>
     public void OnServerStateReceived(Vector3 newPos, Vector3 newVel, Vector3 newAcc, float timestamp)
     {
         float now = Time.time;
         float packetTime = UseTimeSync ? timestamp : now;
         
-        // Đồng bộ time offset nếu bật
         if (UseTimeSync)
         {
+            if (lastServerRecvTime > 0f && timestamp <= lastServerRecvTime)
+            {
+                // Bỏ qua gói cũ hoặc out-of-order
+                return;
+            }
+
             float rtt = 0f;
             try { rtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(AppConfig.Singleton.GAME.SERVER_ID) / 1000f; }
             catch { rtt = 0f; }
@@ -60,32 +63,43 @@ public class DeadReckoningSystem
             {
                 float estimatedServerNow = timestamp + rtt / 2f;
                 float currentOffset = estimatedServerNow - now;
-                if (timeOffset == 0f) timeOffset = currentOffset;
-                else timeOffset = Mathf.Lerp(timeOffset, currentOffset, SYNC_ALPHA);
+                if (!timeOffsetInitialized)
+                {
+                    timeOffset = currentOffset;
+                    timeOffsetInitialized = true;
+                }
+                else
+                {
+                    timeOffset = Mathf.Lerp(timeOffset, currentOffset, SYNC_ALPHA);
+                }
             }
         }
         
-        // Tính toán dt
-        float dt = packetTime - lastServerRecvTime;
-        if (!UseTimeSync) dt = now - lastServerRecvTime;
+        float dt;
+        if (!UseTimeSync)
+        {
+            dt = (lastServerRecvTime > 0f) ? now - lastServerRecvTime : 0.05f;
+        }
+        else
+        {
+            dt = (lastServerRecvTime > 0f) ? packetTime - lastServerRecvTime : 0.05f;
+        }
+
         if (dt < 0.001f) dt = 0.05f;
         lastServerRecvTime = packetTime;
         
-        // Update server state
         serverPos = newPos;
         serverVel = newVel;
-        if (dt > 0.0001f) 
-            serverAcc = (newVel - prevServerVel) / dt;
+        serverAcc = (dt > 0.0001f) ? (newVel - prevServerVel) / dt : Vector3.zero;
         prevServerVel = newVel;
         
-        // Tính jitter
-        float interval = now - lastPacketLocalTime;
+        float interval = (lastPacketLocalTime > 0f) ? now - lastPacketLocalTime : 0f;
         lastPacketLocalTime = now;
         if (packetIntervals.Count >= 20) 
             packetIntervals.RemoveAt(0);
         packetIntervals.Add(interval);
         
-        ResetSplineState(serverPos);
+        //ResetSplineState(serverPos);
     }
     
     public void ResetSplineState(Vector3 pos)
@@ -104,7 +118,9 @@ public class DeadReckoningSystem
     {
         float now = Time.time;
         float serverTimeNow = UseTimeSync ? (now + timeOffset) : now;
-        float predictTime = Mathf.Clamp(serverTimeNow - lastServerRecvTime, 0f, 0.5f);
+
+        float rawDelta = (lastServerRecvTime > 0f) ? serverTimeNow - lastServerRecvTime : 0f;
+        float predictTime = Mathf.Clamp(rawDelta + 0.05f, 0f, 0.5f);
         
         Vector3 predicted = Vector3.zero;
         
@@ -129,6 +145,7 @@ public class DeadReckoningSystem
     public Vector3 SmoothDampPosition(Vector3 currentPos, Vector3 targetPosParam, Vector3 velocity, float smoothTime, float deltaTime)
     {
         targetPos = targetPosParam;
+        vel = velocity;
         return Vector3.SmoothDamp(currentPos, targetPos, ref vel, smoothTime, float.PositiveInfinity, deltaTime);
     }
     

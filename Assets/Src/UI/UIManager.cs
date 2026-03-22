@@ -74,8 +74,8 @@ public class UIManager : MonoBehaviour
     [SerializeField] public List<Text> carDeadReckoningLabels;
 
     [Header("Dead Reckoning Accuracy List")]
-    [SerializeField] public List<TMP_Text> carAccuracyTexts; // List showing accuracy for each car
-    [SerializeField] public List<TMP_Text> carJerkTexts; // List showing jerk for each car
+    [SerializeField] public List<Text> carAccuracyTexts; // List showing accuracy for each car
+    [SerializeField] public List<Text> carJerkTexts; // List showing jerk for each car
 
     [Header("Server Reconciliation Metrics")]
     [SerializeField] public TMP_Text serverReconciliationAccuracy;
@@ -606,6 +606,18 @@ public class UIManager : MonoBehaviour
                 }
             }
         }
+    }
+
+    public void UpdateCarJerk(int id, float jerk)
+    {
+        if (id < 0 || id >= carJerkTexts.Count) return;
+        carJerkTexts[id].text = $"{jerk:0} m/s³";
+    }
+
+    public void UpdateCarAccuracy(int id, float accuracy)
+    {
+        if (id < 0 || id >= carAccuracyTexts.Count) return;
+        carAccuracyTexts[id].text = $"{accuracy:0.0}%";
     }
 
     #endregion

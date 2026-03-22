@@ -348,7 +348,7 @@ public class RaceManager : MonoBehaviour
     List<int> rewindTickQueue = new();
     List<int> collideTickQueue = new();
 
-    private NetworkTimer networkTimer;
+    public NetworkTimer networkTimer { get; private set; }
 
     bool isRewinding = false;
 
@@ -417,28 +417,13 @@ public class RaceManager : MonoBehaviour
 
     void FixedUpdate()
     {
+        if (networkTimer == null)
+            networkTimer = new NetworkTimer(TICK_RATE);
+        
+        if (!networkTimer.ShouldTick())
+            return;
+
         bool canRewind = false;
-
-        // int networkTick = NetworkManager.Singleton != null ? NetworkManager.Singleton.ServerTime.Tick : 0;
-        // if (serverTick > 1 && networkTick > 1)
-        // {
-        //     int tickDiff = Mathf.Abs(serverTick - networkTick);
-        //     if (tickDiff > 10 && tickDiff < 100)
-        //     {
-        //         Debug.LogWarning($"[RaceManager] Cảnh báo: Tick local/server lệch {tickDiff} (local={serverTick}, server={networkTick})");
-        //     }
-        //     else if (tickDiff >= 100)
-        //     {
-        //         Debug.LogWarning($"[RaceManager] Tick local/server lệch quá lớn ({tickDiff}), tự đồng bộ lại: local={serverTick}, server={networkTick}");
-        //         serverTick = networkTick;
-        //     }
-        // }
-
-        // if (serverTick == 1 && networkTick > 0) {
-        //     serverTick = networkTick;
-        // } else if (serverTick > 1 || networkTick > 0) {
-        //     serverTick++;
-        // }
 
         List<CarController> cars = new();
 
@@ -459,11 +444,7 @@ public class RaceManager : MonoBehaviour
         // Server side
         if ((NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) && !canRewind) return;
 
-        if (networkTimer == null)
-            networkTimer = new NetworkTimer(TICK_RATE);
         
-        if (!networkTimer.ShouldTick())
-            return;
 
         serverTick = networkTimer.CurrentTick;
 

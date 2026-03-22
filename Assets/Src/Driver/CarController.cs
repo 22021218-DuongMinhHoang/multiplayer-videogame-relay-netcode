@@ -196,7 +196,6 @@ public class CarController : NetworkBehaviour
     // Helper systems
     private CircularBuffer<StatePayload> clientStateBuffer;
     private CircularBuffer<InputPayload> clientInputBuffer;
-    private NetworkTimer networkTimer;
     private InputManager inputManager;
     private CarMovement carMovement;
     private DeadReckoningSystem deadReckoningSystem;
@@ -236,7 +235,7 @@ public class CarController : NetworkBehaviour
     private float _splineTimer;
 
     private double _aeeSum = 0.0;
-    private long _aeeCount = 0;
+    private long receiveDataCount = 0;
     private long _hitCount = 0;
     private float hitThreshold = 0.5f;
     private float _lastPacketLocalTime;
@@ -355,7 +354,6 @@ public class CarController : NetworkBehaviour
         // Initialize helper systems
         clientStateBuffer = new CircularBuffer<StatePayload>(BUFFER_SIZE);
         clientInputBuffer = new CircularBuffer<InputPayload>(BUFFER_SIZE);
-        networkTimer = new NetworkTimer(TICK_RATE);
         inputManager = new InputManager();
         carMovement = new CarMovement();
         carMovement.SetMovementParameters(maxSpeed, maxReverseSpeed, accelerationRate, decelerationRate, brakeRate, turnSpeed);
@@ -480,10 +478,21 @@ public class CarController : NetworkBehaviour
         { 
             try 
             { 
-                UIManager.Instance.averageExportError.text = $"AEE: {serverReconciliation.AverageExportError:F2}"; 
-                UIManager.Instance.hitPercentage.text = $"Hit: {serverReconciliation.HitPercentage:F1}%"; 
+                // UIManager.Instance.averageExportError.text = $"AEE: {serverReconciliation.AverageExportError:F2}"; 
+                // UIManager.Instance.hitPercentage.text = $"Hit: {serverReconciliation.HitPercentage:F1}%"; 
                 // UIManager.Instance.jitterEstimate.text = $"Jitter: {deadReckoningSystem.GetJitterEstimate():F0}ms"; 
                 // UIManager.Instance.instantError.text = $"Err: {error:F2}m"; 
+
+
+                if (UseDeadReckoning)
+                {
+                    var oldState = clientStateBuffer.Get(newVal.Tick);
+                    float dis = Vector3.Distance(oldState.position, newVal.Position);
+                    receiveDataCount++;
+                    if (dis <= hitThreshold) _hitCount++;
+
+                    UIManager.Instance.UpdateCarAccuracy(ID, (float) _hitCount / receiveDataCount * 100f);
+                }
             } 
             catch {} 
         }
@@ -537,6 +546,16 @@ public class CarController : NetworkBehaviour
         {
             ProcessClientDeadReckoning();
             CalculateJerk();
+
+            var networkTimer = RaceManager.Instance.networkTimer;
+
+            clientStateBuffer.Add(new StatePayload()
+            {
+                tick = networkTimer.CurrentTick,
+                position = transform.position,
+                rotation = transform.rotation,
+                speed = currentSpeed
+            }, networkTimer.CurrentTick);
         }
 
         return (false, lastProcessedTick);
@@ -544,12 +563,7 @@ public class CarController : NetworkBehaviour
     
     private void ProcessClientPrediction()
     {
-        if (networkTimer == null)
-            networkTimer = new NetworkTimer(TICK_RATE);
-        
-        if (!networkTimer.ShouldTick())
-            return;
-        
+        var networkTimer = RaceManager.Instance.networkTimer;
         int currentTick = networkTimer.CurrentTick;
         
         InputPayload inputPayload = inputManager.CreateInputPayload(inputAcceleration, inputBrake, inputSteering, CheckCollision());
@@ -557,6 +571,17 @@ public class CarController : NetworkBehaviour
         
         clientInputBuffer.Add(inputPayload, currentTick);
         inputManager.UpdateLastKnownInput(inputPayload);
+
+        if (IsServer)
+        {
+            // Host (Server + Owner): add input directly, don't need RPC
+            // Don't predict locally - server is authoritative
+            inputManager.AddPendingInput(inputPayload);
+            return;
+        }
+
+        // Remote client (Owner but not Server): submit input to server and predict locally
+        SubmitInputServerRpc(inputPayload);
 
         if (UseClientSidePrediction)
         {
@@ -570,10 +595,6 @@ public class CarController : NetworkBehaviour
             currentSpeed = clampedSpeed;
         }
 
-        
-        
-        SubmitInputServerRpc(inputPayload);
-        
         HandleServerReconciliation();
     }
 
@@ -614,6 +635,9 @@ public class CarController : NetworkBehaviour
         StatePayload latestServerState = serverReconciliation.LatestServerState;
         if (latestServerState.tick == 0 || latestServerState.position == Vector3.zero)
             return;
+
+        var networkTimer = RaceManager.Instance.networkTimer;
+            
         
         var (positionError, rotationError) = serverReconciliation.CalculateErrors(
             new StatePayload { position = _rigidbody.position, rotation = _rigidbody.rotation, speed = currentSpeed, tick = networkTimer.CurrentTick },
@@ -627,6 +651,7 @@ public class CarController : NetworkBehaviour
             _rigidbody.position = latestServerState.position;
             _rigidbody.rotation = latestServerState.rotation;
             currentSpeed = latestServerState.speed;
+
             
             int tickToReplay = latestServerState.tick + 1;
             while (tickToReplay <= networkTimer.CurrentTick)
@@ -793,11 +818,6 @@ public class CarController : NetworkBehaviour
 
     public void Update()
     {
-        if (IsSpawned && networkTimer != null)
-        {
-            networkTimer.Update(Time.deltaTime);
-        }
-
         if (visualTransform != null && !_rigidbody.isKinematic)
         {
             visualTransform.position = Vector3.Lerp(visualTransform.position, transform.position, Time.deltaTime * 15f);
@@ -816,7 +836,7 @@ public class CarController : NetworkBehaviour
         float vel = Vector3.Distance(transform.position, prevPos) / dt; prevPos = transform.position;
         float acc = Mathf.Abs(vel - prevVel) / dt; prevVel = vel;
         float jerk = Mathf.Abs(acc - prevAcc) / dt; prevAcc = acc;
-        if(jerkCounter != null && UIManager.Instance.carJerk != null) UIManager.Instance.carJerk.text = $"Jerk: {(int)jerkCounter.Update(jerk)}";
+        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerk);
     }
     #endregion
 
