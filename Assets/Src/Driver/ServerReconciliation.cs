@@ -5,8 +5,8 @@ using UnityEngine;
 
 public class ServerReconciliation
 {
-    private const float RECONCILE_POS_THRESHOLD = 1.5f;
-    private const float RECONCILE_ROT_THRESHOLD = 1.0f;
+    private const float RECONCILE_POS_THRESHOLD = 2.5f;
+    private const float RECONCILE_ROT_THRESHOLD = 5.0f;
     private const float RECONCILE_LERP_TIME = 0.2f;
     private const float LOW_SPEED_THRESHOLD = 0.15f;
     
