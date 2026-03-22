@@ -77,11 +77,12 @@ public class UIManager : MonoBehaviour
     [SerializeField] public List<Text> carAccuracyTexts; // List showing accuracy for each car
     [SerializeField] public List<Text> carJerkTexts; // List showing jerk for each car
 
-    [Header("Server Reconciliation Metrics")]
-    [SerializeField] public TMP_Text serverReconciliationAccuracy;
+    // [Header("Server Reconciliation Metrics")]
+    // [SerializeField] public TMP_Text serverReconciliationAccuracy;
 
     [Header("Lag Compensation Metrics")]
-    [SerializeField] public TMP_Text collisionCountText;
+    [SerializeField] public Text clientCollisionCountText;
+    [SerializeField] public Text serverCollisionCountText;
     
     // --- NETWORK SIMULATOR & BOT UI ---
     [Header("Debug & Simulation")]
@@ -618,6 +619,21 @@ public class UIManager : MonoBehaviour
     {
         if (id < 0 || id >= carAccuracyTexts.Count) return;
         carAccuracyTexts[id].text = $"{accuracy:0.0}%";
+    }
+
+    public void UpdateServerReconciliationAccuracy(float accuracy)
+    {
+        // if (serverReconciliationAccuracy != null) serverReconciliationAccuracy.text = $"Reconciliation Accuracy: {accuracy:0.0}%";
+    }
+
+    public void UpdateClientCollisionCounts(int clientCount)
+    {
+        if (clientCollisionCountText != null) clientCollisionCountText.text = $"{clientCount}";
+    }
+
+    public void UpdateServerCollisionCounts(int serverCount)
+    {
+        if (serverCollisionCountText != null) serverCollisionCountText.text = $"{serverCount}";
     }
 
     #endregion

@@ -16,6 +16,8 @@ namespace CustomTypes
 
         [SerializeField] [HideInInspector] private float speed;
 
+        [SerializeField] [HideInInspector] private int collisionCount;
+
         internal Vector3 Position
         {
             get => new(_x, _y, _z);
@@ -59,6 +61,12 @@ namespace CustomTypes
             set => speed = value;
         }
 
+        internal int CollisionCount
+        {
+            get => collisionCount;
+            set => collisionCount = value;
+        }
+
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref _x);
@@ -83,6 +91,8 @@ namespace CustomTypes
             serializer.SerializeValue(ref tick);
 
             serializer.SerializeValue(ref speed);
+
+            serializer.SerializeValue(ref collisionCount);
         }
     }
 

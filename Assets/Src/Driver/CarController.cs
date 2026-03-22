@@ -240,6 +240,9 @@ public class CarController : NetworkBehaviour
     private float hitThreshold = 0.5f;
     private float _lastPacketLocalTime;
     private List<float> _packetIntervals = new List<float>();
+
+    private int collisionCounter = 0;
+    private int serverCollisionCounter = 0;
     
 
     Vector3 prevPos;
@@ -473,6 +476,8 @@ public class CarController : NetworkBehaviour
         
         float error = Vector3.Distance(transform.position, newVal.Position);
         serverReconciliation.RecordError(error);
+
+        serverCollisionCounter = newVal.CollisionCount;
         
         if (UIManager.Instance != null) 
         { 
@@ -493,6 +498,8 @@ public class CarController : NetworkBehaviour
 
                     UIManager.Instance.UpdateCarAccuracy(ID, (float) _hitCount / receiveDataCount * 100f);
                 }
+
+                UIManager.Instance.UpdateServerCollisionCounts(serverCollisionCounter);
             } 
             catch {} 
         }
@@ -811,7 +818,8 @@ public class CarController : NetworkBehaviour
                 Velocity = _rigidbody.velocity,
                 Timestamp = Time.time,
                 Tick = state.tick, 
-                Speed = state.speed
+                Speed = state.speed,
+                CollisionCount = collisionCounter
             };
         }
     }
@@ -921,6 +929,12 @@ public class CarController : NetworkBehaviour
         lastProcessedTick = tick;
         if (inputManager != null)
             inputManager.RemoveOldPendingInputs(tick);
+    }
+
+    void OnCollisionEnter(Collision collision)
+    {
+        collisionCounter++;
+        UIManager.Instance.UpdateClientCollisionCounts(collisionCounter);
     }
 
     #endregion
