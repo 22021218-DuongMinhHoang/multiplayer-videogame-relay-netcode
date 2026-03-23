@@ -645,6 +645,7 @@ public class CarController : NetworkBehaviour
 
         var networkTimer = RaceManager.Instance.networkTimer;
             
+        if (networkTimer.CurrentTick - latestServerState.tick > BUFFER_SIZE / 2) return;
         
         var (positionError, rotationError) = serverReconciliation.CalculateErrors(
             new StatePayload { position = _rigidbody.position, rotation = _rigidbody.rotation, speed = currentSpeed, tick = networkTimer.CurrentTick },
@@ -658,7 +659,6 @@ public class CarController : NetworkBehaviour
             _rigidbody.position = latestServerState.position;
             _rigidbody.rotation = latestServerState.rotation;
             currentSpeed = latestServerState.speed;
-
             
             int tickToReplay = latestServerState.tick + 1;
             while (tickToReplay <= networkTimer.CurrentTick)
@@ -760,14 +760,15 @@ public class CarController : NetworkBehaviour
     {
         if (!UseLagCompensation) return false;
         Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
-        RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
+        //RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
+
+        RaycastHit[] hits = Physics.SphereCastAll(_rigidbody.position, 2.5f, Vector3.zero);
         
         foreach (var hit in hits)
         {
-            if (!hit.collider.isTrigger && hit.collider.transform.root.gameObject != this.gameObject)
+            if (!hit.collider.isTrigger)
             {
-                if (Vector3.Dot(hit.normal, Vector3.up) < 0.8f)
-                    return true;
+                return true;
             }
         }
         return false;
@@ -778,8 +779,8 @@ public class CarController : NetworkBehaviour
         if (input.tick == 0) return;
         if (inputManager != null) inputManager.UpdateLastKnownInput(input);
         StatePayload state = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f);
-        _rigidbody.position = state.position;
-        _rigidbody.rotation = state.rotation;
+        _rigidbody.MovePosition(state.position);
+        _rigidbody.MoveRotation(state.rotation);
         currentSpeed = state.speed;
     }
 
