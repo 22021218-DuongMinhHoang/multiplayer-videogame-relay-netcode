@@ -47,12 +47,12 @@
   <Project Path="Unity.Services.Core.Editor.csproj" />
   <Project Path="Unity.TestTools.CodeCoverage.Editor.csproj" />
   <Project Path="Unity.Burst.CodeGen.csproj" />
+  <Project Path="Assembly-CSharp.csproj" />
   <Project Path="Unity.Services.Core.Configuration.Editor.csproj" />
   <Project Path="Unity.Services.Core.csproj" />
   <Project Path="Unity.VisualScripting.State.csproj" />
   <Project Path="Unity.TextMeshPro.csproj" />
   <Project Path="Unity.Performance.Profile-Analyzer.Editor.csproj" />
-  <Project Path="Assembly-CSharp.csproj" />
   <Project Path="Unity.Multiplayer.Tools.NetStatsMonitor.Component.csproj" />
   <Project Path="Unity.VisualScripting.SettingsProvider.Editor.csproj" />
   <Project Path="Unity.VSCode.Editor.csproj" />

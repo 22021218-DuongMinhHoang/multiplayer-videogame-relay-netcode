@@ -59,7 +59,7 @@ public class GameManager : MonoBehaviour
     [SerializeField] [HideInInspector] public RaceState currentRace = RaceState.Schedule;
     [SerializeField] [HideInInspector] public float raceTime;
     
-    [SerializeField] [HideInInspector] private GameState _state = GameState.Idle;
+    [SerializeField] private GameState _state = GameState.Idle;
     
 
     private GameObject _playerPrefab;

@@ -542,6 +542,8 @@ public class CarController : NetworkBehaviour
             ProcessServerMovement();
         }
 
+        if (Mathf.Abs(currentSpeed) < 0.05f) _rigidbody.velocity = Vector3.zero;
+
         if (IsServer)
         {
             if (!_rigidbody.isKinematic) 
@@ -654,6 +656,7 @@ public class CarController : NetworkBehaviour
         
         serverReconciliation.RecordError(positionError);
         
+        
         if (serverReconciliation.ShouldReconcile(positionError, rotationError, currentSpeed, latestServerState.speed))
         {
             _rigidbody.position = latestServerState.position;
@@ -676,8 +679,10 @@ public class CarController : NetworkBehaviour
                 tickToReplay++;
             }
             
-            if (ENABLE_DEBUG_LOG)
-                Debug.LogWarning($"[Reconciliation] Rewind/Replay từ tick {latestServerState.tick} (Error: {positionError:F2}m)");
+            
+
+            // if (ENABLE_DEBUG_LOG)
+            //     Debug.LogWarning($"[Reconciliation] Rewind/Replay từ tick {latestServerState.tick} (Error: {positionError:F2}m)");
         }
     }
     
@@ -762,17 +767,23 @@ public class CarController : NetworkBehaviour
         Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
         //RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
 
-        RaycastHit[] hits = Physics.SphereCastAll(_rigidbody.position, 2.5f, Vector3.zero);
-        
+        Collider[] hits = Physics.OverlapSphere(_rigidbody.position, 2.5f);
+
         foreach (var hit in hits)
         {
-            if (!hit.collider.isTrigger)
+            if (!hit.isTrigger && hit.gameObject != gameObject && hit.gameObject.layer != LayerMask.NameToLayer("Unhittable"))
             {
                 return true;
             }
         }
         return false;
     }
+
+    // void OnDrawGizmos()
+    // {
+    //     Gizmos.color = Color.red;
+    //     Gizmos.DrawSphere(transform.position, 2.5f);
+    // }
 
     public void ApplyInputForPhysics(InputPayload input)
     {

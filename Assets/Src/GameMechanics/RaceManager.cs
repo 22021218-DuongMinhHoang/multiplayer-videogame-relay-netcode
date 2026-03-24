@@ -108,6 +108,8 @@ public class RaceManager : MonoBehaviour
 
         inputBuffer = new CircularBuffer<InputPayload[]>(bufferSize);
         stateBuffer = new CircularBuffer<StatePayload[]>(bufferSize);
+
+        networkTimer = new NetworkTimer(TICK_RATE);
     }
 
     private void Update()
@@ -132,7 +134,7 @@ public class RaceManager : MonoBehaviour
                 StartCoroutine(LeaveRace());
             }
 
-        if (IsRacing && networkTimer != null)
+        if (GameManager.Instance.State == GameState.Started && networkTimer != null)
         {
             networkTimer.Update(Time.deltaTime);
         }
@@ -339,8 +341,8 @@ public class RaceManager : MonoBehaviour
     [Header("Lag Compensation Settings")]
     [SerializeField] private bool ENABLE_DEBUG_LOG = true; 
     [SerializeField] int bufferSize = 8192;
-    private const float TICK_RATE = 50f;
-    float rewindCooldownTime = 0.5f;
+    float TICK_RATE = 50f;
+    float rewindCooldownTime = 1f;
     private CircularBuffer<StatePayload[]> stateBuffer;
     public CircularBuffer<InputPayload[]> inputBuffer;
     int serverTick = 1;
@@ -375,16 +377,12 @@ public class RaceManager : MonoBehaviour
             }
         }
 
-        if (car != null)
+        if (car != null && input.isCollide)
         {
-            int carTick = car.GetLastProcessedTick();
-            if (Mathf.Abs(carTick - tick) <= 100)
+            int carTick = networkTimer.CurrentTick;
+            if (carTick - tick <= bufferSize / 10)
             {
-                if (input.isCollide)
-                {
-                    if (!collideTickQueue.Contains(tick)) 
-                        collideTickQueue.Add(tick);
-                }
+                if (!collideTickQueue.Contains(tick)) collideTickQueue.Add(tick);
             }
         }
     }
@@ -417,9 +415,6 @@ public class RaceManager : MonoBehaviour
 
     void FixedUpdate()
     {
-        if (networkTimer == null)
-            networkTimer = new NetworkTimer(TICK_RATE);
-        
         if (!networkTimer.ShouldTick())
             return;
 
@@ -444,36 +439,36 @@ public class RaceManager : MonoBehaviour
         // Server side
         if ((NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) && !canRewind) return;
 
-        
-
         serverTick = networkTimer.CurrentTick;
 
         if (rewindCooldownCounter >= rewindCooldownTime)
         {
             int rewindTick = -1;
             string triggerReason = "";
+            rewindCooldownCounter = 0;
 
             while (collideTickQueue.Count > 0)
             {
                 int tick = collideTickQueue[0];
                 collideTickQueue.RemoveAt(0);
 
-                if (serverTick - tick <= 100 && serverTick - tick >= 0)
+                if (serverTick - tick <= bufferSize / 10 && serverTick - tick >= 0)
                 {
                     if (rewindTick == -1 || tick < rewindTick) {
                         rewindTick = tick;
                         triggerReason = "Collision";
+                        break;
                     }
                 }
             }
 
             if (rewindTick >= 0)
             {
-                if (serverTick - rewindTick > 30)
-                {
-                    rewindTick = serverTick - 30;
-                    triggerReason += " [Capped at 30 Ticks]";
-                }
+                // if (serverTick - rewindTick > 30)
+                // {
+                //     rewindTick = serverTick - 30;
+                //     triggerReason += " [Capped at 30 Ticks]";
+                // }
 
                 if (ENABLE_DEBUG_LOG) 
                     Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
@@ -510,6 +505,7 @@ public class RaceManager : MonoBehaviour
             {
                 for (int i = 0; i < players.Count; i++)
                 {
+                    if (players[i] == null) continue;
                     CarController carReal = players[i].GetCarController;
                     int id = players[i].ID;
 
@@ -549,6 +545,7 @@ public class RaceManager : MonoBehaviour
                 {
                     for (int i = 0; i < players.Count; i++)
                     {
+                        if (players[i] == null) continue;
                         CarController carReal = players[i].GetCarController;
                         int id = players[i].ID;
 
@@ -572,9 +569,10 @@ public class RaceManager : MonoBehaviour
 
                     for (int i = 0; i < players.Count; i++)
                     {
+                        if (players[i] == null) continue;
                         CarController carReal = players[i].GetCarController;
                         int id = players[i].ID;
-                        if (carReal != null)
+                        if (carReal != null && stateBuffer.Get(tickToProcess) != null)
                             stateBuffer.Get(tickToProcess)[id] = carReal.GetStateOfCar(tickToProcess);
                     }
 
@@ -584,6 +582,7 @@ public class RaceManager : MonoBehaviour
 
                 for (int i = 0; i < players.Count; i++)
                 {
+                    if (players[i] == null) continue;
                     CarController carReal = players[i].GetCarController;
                     if (carReal != null)
                     {

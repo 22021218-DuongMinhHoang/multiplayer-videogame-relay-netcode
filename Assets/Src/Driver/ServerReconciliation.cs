@@ -51,7 +51,7 @@ public class ServerReconciliation
         
         bool errorsLarge = posError > RECONCILE_POS_THRESHOLD || rotError > RECONCILE_ROT_THRESHOLD;
         
-        return errorsLarge && !isRewinding && !isNearlyStopped;
+        return errorsLarge && !isRewinding;
     }
     
     public bool ShouldHardSnap(float posError, float rotError)

@@ -51,7 +51,6 @@ public class DeadReckoningSystem
         {
             if (lastServerRecvTime > 0f && timestamp <= lastServerRecvTime)
             {
-                // Bỏ qua gói cũ hoặc out-of-order
                 return;
             }
 
@@ -99,7 +98,7 @@ public class DeadReckoningSystem
             packetIntervals.RemoveAt(0);
         packetIntervals.Add(interval);
         
-        //ResetSplineState(serverPos);
+        ResetSplineState(serverPos);
     }
     
     public void ResetSplineState(Vector3 pos)

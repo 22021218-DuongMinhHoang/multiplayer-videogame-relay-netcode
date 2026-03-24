@@ -1,7 +1,9 @@
+using System;
 using UnityEngine;
 
 namespace CustomTypes
 {
+    [Serializable]
     public class NetworkTimer
     {
         private float timer;
