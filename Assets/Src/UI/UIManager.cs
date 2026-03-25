@@ -361,7 +361,7 @@ public class UIManager : MonoBehaviour
         if (pingSlider != null)
         {
             pingSlider.minValue = 0;
-            pingSlider.maxValue = 500; 
+            pingSlider.maxValue = 2000; 
             pingSlider.value = 0;
             pingSlider.onValueChanged.AddListener(OnPingSliderChanged);
         }
@@ -612,7 +612,7 @@ public class UIManager : MonoBehaviour
     public void UpdateCarJerk(int id, float jerk)
     {
         if (id < 0 || id >= carJerkTexts.Count) return;
-        carJerkTexts[id].text = $"{jerk:0} m/s³";
+        carJerkTexts[id].text = $"{jerk:0}³";
     }
 
     public void UpdateCarAccuracy(int id, float accuracy)

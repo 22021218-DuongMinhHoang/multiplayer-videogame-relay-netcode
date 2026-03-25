@@ -237,7 +237,7 @@ public class CarController : NetworkBehaviour
     private double _aeeSum = 0.0;
     private long receiveDataCount = 0;
     private long _hitCount = 0;
-    private float hitThreshold = 0.5f;
+    private float hitThreshold = 2.5f;
     private float _lastPacketLocalTime;
     private List<float> _packetIntervals = new List<float>();
 
@@ -460,19 +460,18 @@ public class CarController : NetworkBehaviour
         
         deadReckoningSystem.OnServerStateReceived(newVal.Position, newVal.Velocity, newVal.Acceleration, newVal.Timestamp);
         
-        if (UseServerReconciliation)
+        if (UseServerReconciliation && IsOwner && IsClient)
         {
             serverReconciliation.RecordServerState(newVal.Tick, newVal.Position, Quaternion.Euler(newVal.Rotation), newVal.Speed);
         }
-        else
+        else if (IsClient && !IsOwner && !UseDeadReckoning)
         {
-            if (IsClient && !IsOwner)
-            {
-                transform.position = newVal.Position;
-                transform.rotation = Quaternion.Euler(newVal.Rotation);
-                currentSpeed = newVal.Speed;
-            }
+            transform.position = newVal.Position;
+            transform.rotation = Quaternion.Euler(newVal.Rotation);
+            currentSpeed = newVal.Speed;
         }
+
+
         
         float error = Vector3.Distance(transform.position, newVal.Position);
         serverReconciliation.RecordError(error);
@@ -499,7 +498,7 @@ public class CarController : NetworkBehaviour
                     UIManager.Instance.UpdateCarAccuracy(ID, (float) _hitCount / receiveDataCount * 100f);
                 }
 
-                UIManager.Instance.UpdateServerCollisionCounts(serverCollisionCounter);
+                if (IsOwner) UIManager.Instance.UpdateServerCollisionCounts(serverCollisionCounter);
             } 
             catch {} 
         }
@@ -554,7 +553,7 @@ public class CarController : NetworkBehaviour
         else if (IsClient && !IsOwner && !_rigidbody.isKinematic && _networkData.Value.Position != Vector3.zero)
         {
             ProcessClientDeadReckoning();
-            CalculateJerk();
+            
 
             var networkTimer = RaceManager.Instance.networkTimer;
 
@@ -566,6 +565,8 @@ public class CarController : NetworkBehaviour
                 speed = currentSpeed
             }, networkTimer.CurrentTick);
         }
+
+        CalculateJerk();
 
         return (false, lastProcessedTick);
     }
@@ -737,8 +738,8 @@ public class CarController : NetworkBehaviour
     {
         if (!UseDeadReckoning)
         {
-            _rigidbody.MovePosition(deadReckoningSystem.TargetPos);
-            _rigidbody.MoveRotation(Quaternion.Euler(_networkData.Value.Rotation));
+            //_rigidbody.MovePosition(serverReconciliation.LatestServerState.position);
+            //_rigidbody.MoveRotation(serverReconciliation.LatestServerState.rotation);
             return;
         }
         
@@ -852,7 +853,7 @@ public class CarController : NetworkBehaviour
     }
 
     private void CalculateJerk() {
-        float dt = 1f / TICK_RATE;
+        float dt = 1f;
         float vel = Vector3.Distance(transform.position, prevPos) / dt; prevPos = transform.position;
         float acc = Mathf.Abs(vel - prevVel) / dt; prevVel = vel;
         float jerk = Mathf.Abs(acc - prevAcc) / dt; prevAcc = acc;
@@ -945,8 +946,12 @@ public class CarController : NetworkBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
-        collisionCounter++;
-        UIManager.Instance.UpdateClientCollisionCounts(collisionCounter);
+        if (IsOwner)
+        {
+            collisionCounter++;
+            UIManager.Instance.UpdateClientCollisionCounts(collisionCounter);
+        }
+        
     }
 
     #endregion

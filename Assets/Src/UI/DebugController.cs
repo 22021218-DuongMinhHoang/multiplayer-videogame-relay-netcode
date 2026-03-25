@@ -36,6 +36,7 @@ public class DebugController : MonoBehaviour
     [SerializeField] [HideInInspector] private int _averageCounter;
     [SerializeField] [HideInInspector] private int _currentAveraged;
     [SerializeField] [HideInInspector] private int[] _frameRateSamples;
+    [SerializeField] int pingCap = 60;
 
     private void Awake()
     {
@@ -92,6 +93,8 @@ public class DebugController : MonoBehaviour
             try
             {
                 var currentRtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID);
+                var ping = currentRtt - (ulong) pingCap;
+                if (ping < 0) ping = 0;
                 statRtt.text = $"{currentRtt.ToString()}ms Ping";
             }
             catch (Exception)
