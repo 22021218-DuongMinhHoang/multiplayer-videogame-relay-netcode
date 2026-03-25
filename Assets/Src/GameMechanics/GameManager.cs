@@ -114,7 +114,7 @@ public class GameManager : MonoBehaviour
     {
         mainCamera.cullingMask = !screen.Equals(AppScreen.Game)
             ? LayerMask.GetMask("UI")
-            : LayerMask.GetMask("Default", "Player", "UI");
+            : LayerMask.GetMask("Default", "Player", "UI", "Unhittable");
     }
 
     private void OnStateChange(GameState oldState, GameState newState)

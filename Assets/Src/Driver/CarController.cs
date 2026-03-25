@@ -763,7 +763,7 @@ public class CarController : NetworkBehaviour
     
     private bool CheckCollision()
     {
-        if (!UseLagCompensation) return false;
+        if (!UseLagCompensation || IsServer) return false;
         Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
         //RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
 
@@ -852,11 +852,11 @@ public class CarController : NetworkBehaviour
     }
 
     private void CalculateJerk() {
-        float dt = Time.fixedDeltaTime; if (dt <= 0) return;
+        float dt = 1f / TICK_RATE;
         float vel = Vector3.Distance(transform.position, prevPos) / dt; prevPos = transform.position;
         float acc = Mathf.Abs(vel - prevVel) / dt; prevVel = vel;
         float jerk = Mathf.Abs(acc - prevAcc) / dt; prevAcc = acc;
-        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerk);
+        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerkCounter.Update(jerk));
     }
     #endregion
 
