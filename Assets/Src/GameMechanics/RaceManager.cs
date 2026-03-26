@@ -565,7 +565,7 @@ public class RaceManager : MonoBehaviour
                         }
                     }
 
-                    Physics.Simulate(Time.fixedDeltaTime);
+                    Physics.Simulate(1f / TICK_RATE);
 
                     for (int i = 0; i < players.Count; i++)
                     {
@@ -602,6 +602,15 @@ public class RaceManager : MonoBehaviour
                 isRewinding = false;
             }
         }
+    }
+
+    public void ResetAll()
+    {
+        stateBuffer?.Clear();
+        inputBuffer?.Clear();
+        rewindTickQueue.Clear();
+        collideTickQueue.Clear();
+        isRewinding = false;
     }
 
     #endregion

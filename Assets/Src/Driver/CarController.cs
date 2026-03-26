@@ -880,7 +880,13 @@ public class CarController : NetworkBehaviour
     public void SetPlayerTag(int pos, string playerName) { playerTag.text = pos == -1 ? $"Ready | {NetworkPlayer.Name}" : $"{pos} | {playerName}"; }
 
     private IEnumerator InitiateDeath() { State = CarState.Dead; _rigidbody.isKinematic = true; SwitchVisibilityRpc(toVisible: false); RespawnInProjPosRpc(); if (IsOwner) { NetworkPlayer.Deaths++; UIManager.Instance.SetNotificationCanvas(true, "YOU DIED", "SECONDS UNTIL REAPPEARANCE"); } for (var i = 3; i > 0; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); _rigidbody.isKinematic = false; SwitchVisibilityRpc(); }
-    [Rpc(SendTo.Server)] private void RespawnInProjPosRpc() { transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); _serverPos = transform.position; }
+    [Rpc(SendTo.Server)] private void RespawnInProjPosRpc() 
+    { 
+        transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; 
+        transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); 
+        _serverPos = transform.position; 
+        ResetAll();
+    }
 
     private IEnumerator CheckIsOnTrack() { var cachedIsOnTrack = true; while (true) { yield return new WaitForSeconds(0.5f); _isOnTrack = IsOnTrack(); if (!_isOnTrack && !cachedIsOnTrack && IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(true, "YOU ARE OUT OF TRACK", "SECONDS UNTIL RESPAWN"); for (var i = 3; i > 0 && !IsOnTrack() && IsRacing; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); if (!IsOnTrack()) RespawnInProjPosRpc(); } } cachedIsOnTrack = _isOnTrack; } }
     
@@ -946,12 +952,20 @@ public class CarController : NetworkBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
-        if (IsOwner)
+        if (IsOwner || IsServer)
         {
             collisionCounter++;
             UIManager.Instance.UpdateClientCollisionCounts(collisionCounter);
         }
         
+    }
+
+    void ResetAll()
+    {
+        clientStateBuffer?.Clear();
+        clientInputBuffer?.Clear();
+        serverReconciliation?.Reset();
+        RaceManager.Instance.ResetAll();
     }
 
     #endregion
