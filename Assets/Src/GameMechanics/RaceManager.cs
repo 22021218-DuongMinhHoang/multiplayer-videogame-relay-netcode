@@ -347,7 +347,7 @@ public class RaceManager : MonoBehaviour
     public CircularBuffer<InputPayload[]> inputBuffer;
     int serverTick = 1;
     float rewindCooldownCounter = 0;
-    List<int> rewindTickQueue = new();
+    //List<int> rewindTickQueue = new();
     List<int> collideTickQueue = new();
 
     public NetworkTimer networkTimer { get; private set; }
@@ -384,6 +384,10 @@ public class RaceManager : MonoBehaviour
             {
                 if (!collideTickQueue.Contains(tick)) collideTickQueue.Add(tick);
             }
+            if (collideTickQueue.Count > bufferSize)
+            {
+                collideTickQueue.RemoveAt(0);
+            }
         }
     }
 
@@ -402,15 +406,15 @@ public class RaceManager : MonoBehaviour
 
         stateTemp[id] = state;
 
-        if (Mathf.Abs(serverTick - tick) <= 50)
-        {
-            rewindTickQueue.Add(tick);
+        // if (Mathf.Abs(serverTick - tick) <= 50)
+        // {
+        //     rewindTickQueue.Add(tick);
 
-            if (rewindTickQueue.Count > bufferSize)
-            {
-                rewindTickQueue.RemoveAt(0);
-            }
-        }
+        //     if (rewindTickQueue.Count > bufferSize)
+        //     {
+        //         rewindTickQueue.RemoveAt(0);
+        //     }
+        // }
     }
 
     void FixedUpdate()
@@ -452,7 +456,7 @@ public class RaceManager : MonoBehaviour
                 int tick = collideTickQueue[0];
                 collideTickQueue.RemoveAt(0);
 
-                if (serverTick - tick <= bufferSize / 10 && serverTick - tick >= 0)
+                if (serverTick - tick <= bufferSize / 100 && serverTick - tick >= 0)
                 {
                     if (rewindTick == -1 || tick < rewindTick) {
                         rewindTick = tick;
@@ -503,6 +507,7 @@ public class RaceManager : MonoBehaviour
 
             try
             {
+                CarController[] cars = new CarController[4];
                 for (int i = 0; i < players.Count; i++)
                 {
                     if (players[i] == null) continue;
@@ -512,17 +517,18 @@ public class RaceManager : MonoBehaviour
                     if (carReal != null && firstState[id].tick != 0)
                     {
                         carReal.ApplyState(firstState[id]);
+                        cars[id] = carReal;
                     }
                 }
 
                 Physics.SyncTransforms();
 
-                int tickToProcess = tick + 1;
+                int tickToProcess = tick;
                 int lastTick = serverTick;
                 int simulatedFrames = 0;
 
                 InputPayload[] lastInputs = new InputPayload[4];
-                for (int id = 0; id < 4; id++)
+                for (int id = 0; id < cars.Length; id++)
                 {
                     int searchTick = tick;
                     while (searchTick >= 0)
@@ -543,11 +549,10 @@ public class RaceManager : MonoBehaviour
 
                 while (tickToProcess <= lastTick)
                 {
-                    for (int i = 0; i < players.Count; i++)
+                    for (int i = 0; i < cars.Length; i++)
                     {
-                        if (players[i] == null) continue;
-                        CarController carReal = players[i].GetCarController;
-                        int id = players[i].ID;
+                        CarController carReal = cars[i];
+                        int id = i;
 
                         if (carReal != null)
                         {
@@ -567,11 +572,11 @@ public class RaceManager : MonoBehaviour
 
                     Physics.Simulate(1f / TICK_RATE);
 
-                    for (int i = 0; i < players.Count; i++)
+                    for (int i = 0; i < cars.Length; i++)
                     {
-                        if (players[i] == null) continue;
-                        CarController carReal = players[i].GetCarController;
-                        int id = players[i].ID;
+                        if (cars[i] == null) continue;
+                        CarController carReal = cars[i];
+                        int id = i;
                         if (carReal != null && stateBuffer.Get(tickToProcess) != null)
                             stateBuffer.Get(tickToProcess)[id] = carReal.GetStateOfCar(tickToProcess);
                     }
@@ -580,10 +585,10 @@ public class RaceManager : MonoBehaviour
                     simulatedFrames++;
                 }
 
-                for (int i = 0; i < players.Count; i++)
+                for (int i = 0; i < cars.Length; i++)
                 {
-                    if (players[i] == null) continue;
-                    CarController carReal = players[i].GetCarController;
+                    if (cars[i] == null) continue;
+                    CarController carReal = cars[i];
                     if (carReal != null)
                     {
                         carReal.SyncAfterRewind(lastTick);
@@ -593,8 +598,8 @@ public class RaceManager : MonoBehaviour
                 if (ENABLE_DEBUG_LOG)
                     Debug.Log($"<color=green>[Lag Compensation]</color> Rewind hoàn tất! Đã chạy lại {simulatedFrames} frames mượt mà.");
 
-                collideTickQueue.Clear();
-                rewindTickQueue.Clear();
+                // collideTickQueue.Clear();
+                // rewindTickQueue.Clear();
             }
             finally
             {
@@ -608,7 +613,7 @@ public class RaceManager : MonoBehaviour
     {
         stateBuffer?.Clear();
         inputBuffer?.Clear();
-        rewindTickQueue.Clear();
+        //rewindTickQueue.Clear();
         collideTickQueue.Clear();
         isRewinding = false;
     }
