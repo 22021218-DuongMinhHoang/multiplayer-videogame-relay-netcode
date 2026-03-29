@@ -575,8 +575,19 @@ public class CarController : NetworkBehaviour
     {
         var networkTimer = RaceManager.Instance.networkTimer;
         int currentTick = networkTimer.CurrentTick;
+
+        InputPayload inputPayload;
+
+        if (isBot)
+        {
+            float botSteering = Vector3.SignedAngle(transform.forward, waypoints[currentWaypointIndex].position - transform.position, Vector3.up) > 0 ? 1f : -1f;
+            inputPayload = inputManager.CreateInputPayload(1f, 0f, botSteering, CheckCollision());
+        }
+        else
+        {
+            inputPayload = inputManager.CreateInputPayload(inputAcceleration, inputBrake, inputSteering, CheckCollision());
+        }
         
-        InputPayload inputPayload = inputManager.CreateInputPayload(inputAcceleration, inputBrake, inputSteering, CheckCollision());
         inputPayload.tick = currentTick;
         
         clientInputBuffer.Add(inputPayload, currentTick);
