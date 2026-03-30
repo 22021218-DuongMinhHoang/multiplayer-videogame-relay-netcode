@@ -612,7 +612,7 @@ public class UIManager : MonoBehaviour
     public void UpdateCarJerk(int id, float jerk)
     {
         if (id < 0 || id >= carJerkTexts.Count) return;
-        carJerkTexts[id].text = $"{jerk:0}³";
+        carJerkTexts[id].text = $"{jerk:0}";
     }
 
     public void UpdateCarAccuracy(int id, float accuracy)

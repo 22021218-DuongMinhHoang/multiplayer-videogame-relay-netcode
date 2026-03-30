@@ -487,13 +487,19 @@ public class CarController : NetworkBehaviour
                 // UIManager.Instance.jitterEstimate.text = $"Jitter: {deadReckoningSystem.GetJitterEstimate():F0}ms"; 
                 // UIManager.Instance.instantError.text = $"Err: {error:F2}m"; 
 
+                int tickGap = (int)(NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID) / 1000f * TICK_RATE);
 
-                if (UseDeadReckoning)
+                if (UseDeadReckoning && Mathf.Abs(RaceManager.Instance.networkTimer.CurrentTick - newVal.Tick) <= 2 * tickGap)
                 {
-                    var oldState = clientStateBuffer.Get(newVal.Tick);
-                    float dis = Vector3.Distance(oldState.position, newVal.Position);
+                    // var oldState = clientStateBuffer.Get(newVal.Tick);
+
+                    // float dis = Vector3.Distance(oldState.position, newVal.Position);
+
+                    float dis = Vector3.Distance(_rigidbody.position, newVal.Position);
                     receiveDataCount++;
                     if (dis <= hitThreshold) _hitCount++;
+
+                    if (!IsOwner) Debug.Log($"Car:{ID} ErrorDistance: {dis}, oldState: {_rigidbody.position}, newVal: {newVal.Position}, tick: {newVal.Tick}");
 
                     UIManager.Instance.UpdateCarAccuracy(ID, (float) _hitCount / receiveDataCount * 100f);
                 }
@@ -868,7 +874,7 @@ public class CarController : NetworkBehaviour
         float vel = Vector3.Distance(transform.position, prevPos) / dt; prevPos = transform.position;
         float acc = Mathf.Abs(vel - prevVel) / dt; prevVel = vel;
         float jerk = Mathf.Abs(acc - prevAcc) / dt; prevAcc = acc;
-        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerkCounter.Update(jerk));
+        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerkCounter.Update(jerk) * 100f);
     }
     #endregion
 
