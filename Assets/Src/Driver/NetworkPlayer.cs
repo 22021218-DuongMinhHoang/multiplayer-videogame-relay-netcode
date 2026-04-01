@@ -272,7 +272,7 @@ public class NetworkPlayer : NetworkBehaviour
         _networkReady.OnValueChanged += SetPlayerHub;
         _networkHasFinished.OnValueChanged += RaceManager.Instance.OnPlayerHasFinished;
         UIManager.Instance.roomColorSlider.onValueChanged.AddListener(OnColorChange);
-        
+        UIManager.Instance.roomColorSlider.value = UnityEngine.Random.Range(0f, 1f);
         if (IsOwner)
         {
             Name = GameManager.Instance.PlayerName;

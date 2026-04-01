@@ -23434,6 +23434,7 @@ MonoBehaviour:
   _averageCounter: 0
   _currentAveraged: 0
   _frameRateSamples: 
+  pingCap: 60
 --- !u!114 &1660103081
 MonoBehaviour:
   m_ObjectHideFlags: 0

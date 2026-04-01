@@ -65,12 +65,15 @@ public struct StatePayload : INetworkSerializable
     public Quaternion rotation;
     public float speed;
 
+    public int collisionCount;
+
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
     {
         serializer.SerializeValue(ref tick);
         serializer.SerializeValue(ref position);
         serializer.SerializeValue(ref rotation);
         serializer.SerializeValue(ref speed);
+        serializer.SerializeValue(ref collisionCount);
     }
 
     public void Copy(StatePayload state)
@@ -79,6 +82,7 @@ public struct StatePayload : INetworkSerializable
         position = state.position;
         rotation = state.rotation;
         speed = state.speed;
+        collisionCount = state.collisionCount;
     }
 
     public override bool Equals(object obj)
@@ -89,7 +93,8 @@ public struct StatePayload : INetworkSerializable
         return tick == other.tick &&
                Vector3.Distance(position, other.position) <= posThreshold &&
                Quaternion.Angle(rotation, other.rotation) <= angThreshold &&
-               Mathf.Approximately(speed, other.speed);
+               Mathf.Approximately(speed, other.speed)
+               && collisionCount == other.collisionCount;
     }
 
     public override int GetHashCode()
@@ -101,6 +106,7 @@ public struct StatePayload : INetworkSerializable
             hash = hash * 23 + position.GetHashCode();
             hash = hash * 23 + rotation.GetHashCode();
             hash = hash * 23 + speed.GetHashCode();
+            hash = hash * 23 + collisionCount.GetHashCode();
             return hash;
         }
     }
@@ -612,7 +618,7 @@ public class CarController : NetworkBehaviour
 
         if (UseClientSidePrediction)
         {
-            StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+            StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
             predicted.tick = currentTick;
             clientStateBuffer.Add(predicted, currentTick);
             
@@ -686,7 +692,7 @@ public class CarController : NetworkBehaviour
             {
                 InputPayload pastInput = clientInputBuffer.Get(tickToReplay);
                 
-                StatePayload stepState = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, pastInput, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+                StatePayload stepState = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, pastInput, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
                 stepState.tick = tickToReplay;
                 
                 _rigidbody.position = stepState.position;
@@ -734,7 +740,7 @@ public class CarController : NetworkBehaviour
             
             RaceManager.Instance.PendInput(ID, inputToProcess);
             
-            StatePayload stepState = carMovement.SimulateMovement(tempPos, tempRot, tempSpeed, inputToProcess, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+            StatePayload stepState = carMovement.SimulateMovement(tempPos, tempRot, tempSpeed, inputToProcess, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
             tempPos = stepState.position;
             tempRot = stepState.rotation;
             tempSpeed = stepState.speed;
@@ -807,7 +813,7 @@ public class CarController : NetworkBehaviour
     {
         if (input.tick == 0) return;
         if (inputManager != null) inputManager.UpdateLastKnownInput(input);
-        StatePayload state = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+        StatePayload state = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
         _rigidbody.MovePosition(state.position);
         _rigidbody.MoveRotation(state.rotation);
         currentSpeed = state.speed;
@@ -827,7 +833,8 @@ public class CarController : NetworkBehaviour
                 Acceleration = accel,
                 Timestamp = Time.time,
                 Tick = lastProcessedTick, 
-                Speed = currentSpeed
+                Speed = currentSpeed,
+                CollisionCount = collisionCounter
             };
 
             _serverVel = currentVel;
@@ -920,7 +927,7 @@ public class CarController : NetworkBehaviour
     {
         if (input.tick == 0) return new StatePayload();
         
-        return carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f);
+        return carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, input, Time.fixedDeltaTime, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
     }
 
     [System.Obsolete("Use HandleServerReconciliation instead")]
@@ -946,6 +953,7 @@ public class CarController : NetworkBehaviour
         _rigidbody.position = state.position;
         _rigidbody.rotation = state.rotation;
         currentSpeed = carMovement?.ClampSpeed(state.speed) ?? state.speed;
+        collisionCounter = state.collisionCount;
     }
 
     public StatePayload GetStateOfCar(int overwriteTick = -1)
@@ -956,7 +964,8 @@ public class CarController : NetworkBehaviour
             tick = tickToUse,
             position = _rigidbody.position, 
             rotation = _rigidbody.rotation, 
-            speed = currentSpeed
+            speed = currentSpeed,
+            collisionCount = collisionCounter
         };
     }
 

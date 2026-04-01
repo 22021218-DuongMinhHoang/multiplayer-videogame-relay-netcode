@@ -36,7 +36,8 @@ public class CarMovement
         float startSpeed,
         InputPayload input,
         float dt,
-        float rubberBandMultiplier = 1f)
+        float rubberBandMultiplier = 1f,
+        int collisionCount = 0)
     {
         Vector3 pos = startPos;
         Quaternion rot = startRot;
@@ -86,7 +87,8 @@ public class CarMovement
             tick = input.tick,
             position = pos,
             rotation = rot,
-            speed = speed
+            speed = speed,
+            collisionCount = collisionCount
         };
     }
     
