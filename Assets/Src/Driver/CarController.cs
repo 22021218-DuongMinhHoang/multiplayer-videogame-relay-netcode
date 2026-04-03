@@ -592,6 +592,11 @@ public class CarController : NetworkBehaviour
 
         if (isBot)
         {
+            if (Vector3.Distance(transform.position, waypoints[currentWaypointIndex].position) < waypointThreshold)
+            {
+                currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
+            }
+
             float botSteering = Vector3.SignedAngle(transform.forward, waypoints[currentWaypointIndex].position - transform.position, Vector3.up) > 0 ? 1f : -1f;
             inputPayload = inputManager.CreateInputPayload(1f, 0f, botSteering, CheckCollision());
         }
@@ -607,13 +612,10 @@ public class CarController : NetworkBehaviour
 
         if (IsServer)
         {
-            // Host (Server + Owner): add input directly, don't need RPC
-            // Don't predict locally - server is authoritative
             inputManager.AddPendingInput(inputPayload);
             return;
         }
 
-        // Remote client (Owner but not Server): submit input to server and predict locally
         SubmitInputServerRpc(inputPayload);
 
         if (UseClientSidePrediction)

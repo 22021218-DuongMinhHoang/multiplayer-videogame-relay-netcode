@@ -272,9 +272,11 @@ public class NetworkPlayer : NetworkBehaviour
         _networkReady.OnValueChanged += SetPlayerHub;
         _networkHasFinished.OnValueChanged += RaceManager.Instance.OnPlayerHasFinished;
         UIManager.Instance.roomColorSlider.onValueChanged.AddListener(OnColorChange);
-        UIManager.Instance.roomColorSlider.value = UnityEngine.Random.Range(0f, 1f);
+        
         if (IsOwner)
         {
+            UIManager.Instance.roomColorSlider.value = UnityEngine.Random.Range(0f, 1f);
+
             Name = GameManager.Instance.PlayerName;
             Location = "/room";
             _chatMessage = UIManager.Instance.chatController.chatMessage;
