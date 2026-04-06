@@ -582,6 +582,9 @@ public class CarController : NetworkBehaviour
 
         return (false, lastProcessedTick);
     }
+
+    float botSteering = 0f;
+    float botAccel = 0f;
     
     private void ProcessClientPrediction()
     {
@@ -597,8 +600,21 @@ public class CarController : NetworkBehaviour
                 currentWaypointIndex = (currentWaypointIndex + 1) % waypoints.Count;
             }
 
-            float botSteering = Vector3.SignedAngle(transform.forward, waypoints[currentWaypointIndex].position - transform.position, Vector3.up) > 0 ? 1f : -1f;
-            inputPayload = inputManager.CreateInputPayload(1f, 0f, botSteering, CheckCollision());
+            float targetAngle = Vector3.SignedAngle(transform.forward, waypoints[currentWaypointIndex].position - transform.position, Vector3.up);
+            Debug.Log("Angle to waypoint: " + targetAngle);
+
+            if (Mathf.Abs(targetAngle) <= 25f)
+            {
+                botSteering = targetAngle / 25f;
+                botAccel = 1f;
+            }
+            else
+            {
+                botSteering = targetAngle > 0 ? 1f : -1f;
+                botAccel = Mathf.Clamp(1 - Mathf.Abs(targetAngle / 50f), 0f, 1f);
+            }
+            
+            inputPayload = inputManager.CreateInputPayload(botAccel, 0f, botSteering, CheckCollision());
         }
         else
         {
@@ -620,7 +636,7 @@ public class CarController : NetworkBehaviour
 
         if (UseClientSidePrediction)
         {
-            StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
+            StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, RaceManager.Instance.networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f, collisionCounter);
             predicted.tick = currentTick;
             clientStateBuffer.Add(predicted, currentTick);
             
