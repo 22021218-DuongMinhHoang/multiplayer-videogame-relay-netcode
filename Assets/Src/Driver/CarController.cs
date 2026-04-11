@@ -384,7 +384,7 @@ public class CarController : NetworkBehaviour
             try { _networkSpeed.OnValueChanged -= OnSpeedChange; } catch {}
             try { OnLapsChangeEvent -= OnLapsChange; } catch {}
             try { RaceManager.Instance.OnPlayerLeft -= OnPlayerLeft; } catch {}
-            try { UIManager.Instance.gameRespawn.onClick.RemoveListener(RespawnInProjPosRpc); } catch {}
+            try { UIManager.Instance.gameRespawn.onClick.RemoveListener(RespawnInProjPos); } catch {}
             try { EventManager.Instance.ScreenChange.RemoveListener(OnScreenChange); } catch {}
 
             if (UIManager.Instance != null && UIManager.Instance.botToggle != null)
@@ -411,7 +411,7 @@ public class CarController : NetworkBehaviour
                 if (IsOwner) {
                     RocketPanel.SetActive(true); NetworkPlayer.OnRocketChangeEvent += OnRocketChange; _networkSpeed.OnValueChanged += OnSpeedChange;
                     OnLapsChangeEvent += OnLapsChange; RaceManager.Instance.OnPlayerLeft += OnPlayerLeft;
-                    UIManager.Instance.gameRespawn.onClick.AddListener(RespawnInProjPosRpc);
+                    UIManager.Instance.gameRespawn.onClick.AddListener(RespawnInProjPos);
                     EventManager.Instance.ScreenChange.AddListener(OnScreenChange);
                 }
                 SetPlayerTag(-1, NetworkPlayer.Name); OnRocketChange(NetworkPlayer.Rockets); SetMainMeshMaterialColor(NetworkPlayer.CarColor); EventManager.Instance.RaisePlayersCarFound(ID);
@@ -477,13 +477,24 @@ public class CarController : NetworkBehaviour
             currentSpeed = newVal.Speed;
         }
 
+        if (newVal.Rewinded)
+        {
+            transform.position = newVal.Position;
+            transform.rotation = Quaternion.Euler(newVal.Rotation);
+            currentSpeed = newVal.Speed;
+
+            ResetAll();
+        }
 
         
         float error = Vector3.Distance(transform.position, newVal.Position);
         serverReconciliation.RecordError(error);
 
-        serverCollisionCounter = newVal.CollisionCount;
-        
+        if (IsOwner)
+        {
+            serverCollisionCounter = newVal.CollisionCount;
+        }
+
         if (UIManager.Instance != null) 
         { 
             try 
@@ -495,7 +506,7 @@ public class CarController : NetworkBehaviour
 
                 int tickGap = (int)(NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID) / 1000f * TICK_RATE);
 
-                if (UseDeadReckoning && Mathf.Abs(RaceManager.Instance.networkTimer.CurrentTick - newVal.Tick) <= 2 * tickGap)
+                if (((!IsOwner && UseDeadReckoning) || (IsOwner && UseServerReconciliation && !newVal.Rewinded)) && Mathf.Abs(RaceManager.Instance.networkTimer.CurrentTick - newVal.Tick) <= 2 * tickGap)
                 {
                     // var oldState = clientStateBuffer.Get(newVal.Tick);
 
@@ -806,7 +817,7 @@ public class CarController : NetworkBehaviour
     private bool CheckCollision()
     {
         if (!UseLagCompensation || IsServer) return false;
-        Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
+        //Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
         //RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
 
         Collider[] hits = Physics.OverlapSphere(_rigidbody.position, 2.5f);
@@ -837,33 +848,33 @@ public class CarController : NetworkBehaviour
         currentSpeed = state.speed;
     }
 
-    public void ServerSendState()
-    {
-        if (!_rigidbody.isKinematic)
-        {
-            Vector3 currentVel = _rigidbody.velocity;
-            Vector3 accel = Time.fixedDeltaTime > 0 ? (currentVel - _serverVel) / Time.fixedDeltaTime : Vector3.zero;
+    // public void ServerSendState()
+    // {
+    //     if (!_rigidbody.isKinematic)
+    //     {
+    //         Vector3 currentVel = _rigidbody.velocity;
+    //         Vector3 accel = Time.fixedDeltaTime > 0 ? (currentVel - _serverVel) / Time.fixedDeltaTime : Vector3.zero;
 
-            _networkData.Value = new PosAndRotNetworkData() {
-                Position = transform.position,
-                Rotation = transform.rotation.eulerAngles,
-                Velocity = currentVel,
-                Acceleration = accel,
-                Timestamp = Time.time,
-                Tick = lastProcessedTick, 
-                Speed = currentSpeed,
-                CollisionCount = collisionCounter
-            };
+    //         _networkData.Value = new PosAndRotNetworkData() {
+    //             Position = transform.position,
+    //             Rotation = transform.rotation.eulerAngles,
+    //             Velocity = currentVel,
+    //             Acceleration = accel,
+    //             Timestamp = Time.time,
+    //             Tick = lastProcessedTick, 
+    //             Speed = currentSpeed,
+    //             CollisionCount = collisionCounter
+    //         };
 
-            _serverVel = currentVel;
-        }
-        else
-        {
-            _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero };
-        }
-    }
+    //         _serverVel = currentVel;
+    //     }
+    //     else
+    //     {
+    //         _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero };
+    //     }
+    // }
 
-    public void ServerSendState(StatePayload state)
+    public void ServerSendState(StatePayload state, bool rewinded = false)
     {
         if (!_rigidbody.isKinematic)
         {
@@ -874,18 +885,19 @@ public class CarController : NetworkBehaviour
                 Timestamp = Time.time,
                 Tick = state.tick, 
                 Speed = state.speed,
-                CollisionCount = collisionCounter
+                CollisionCount = collisionCounter,
+                Rewinded = rewinded
             };
         }
     }
 
     public void Update()
     {
-        if (visualTransform != null && !_rigidbody.isKinematic)
-        {
-            visualTransform.position = Vector3.Lerp(visualTransform.position, transform.position, Time.deltaTime * 15f);
-            visualTransform.rotation = Quaternion.Slerp(visualTransform.rotation, transform.rotation, Time.deltaTime * 15f);
-        }
+        // if (visualTransform != null && !_rigidbody.isKinematic)
+        // {
+        //     visualTransform.position = Vector3.Lerp(visualTransform.position, transform.position, Time.deltaTime * 15f);
+        //     visualTransform.rotation = Quaternion.Slerp(visualTransform.rotation, transform.rotation, Time.deltaTime * 15f);
+        // }
 
         if (IsServer && IsSpawned)
         {
@@ -921,16 +933,26 @@ public class CarController : NetworkBehaviour
     public void SetMainMeshMaterialColor(Color color) { carMeshes[0].materials[1].color = color; }
     public void SetPlayerTag(int pos, string playerName) { playerTag.text = pos == -1 ? $"Ready | {NetworkPlayer.Name}" : $"{pos} | {playerName}"; }
 
-    private IEnumerator InitiateDeath() { State = CarState.Dead; _rigidbody.isKinematic = true; SwitchVisibilityRpc(toVisible: false); RespawnInProjPosRpc(); if (IsOwner) { NetworkPlayer.Deaths++; UIManager.Instance.SetNotificationCanvas(true, "YOU DIED", "SECONDS UNTIL REAPPEARANCE"); } for (var i = 3; i > 0; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); _rigidbody.isKinematic = false; SwitchVisibilityRpc(); }
-    [Rpc(SendTo.Server)] private void RespawnInProjPosRpc() 
-    { 
+    private IEnumerator InitiateDeath() { State = CarState.Dead; _rigidbody.isKinematic = true; SwitchVisibilityRpc(toVisible: false); RespawnInProjPos(); if (IsOwner) { NetworkPlayer.Deaths++; UIManager.Instance.SetNotificationCanvas(true, "YOU DIED", "SECONDS UNTIL REAPPEARANCE"); } for (var i = 3; i > 0; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); _rigidbody.isKinematic = false; SwitchVisibilityRpc(); }
+    private void RespawnInProjPos() 
+    {
         transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; 
         transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); 
         _serverPos = transform.position; 
         ResetAll();
+        SendToServerRespawnSignalRpc();
     }
 
-    private IEnumerator CheckIsOnTrack() { var cachedIsOnTrack = true; while (true) { yield return new WaitForSeconds(0.5f); _isOnTrack = IsOnTrack(); if (!_isOnTrack && !cachedIsOnTrack && IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(true, "YOU ARE OUT OF TRACK", "SECONDS UNTIL RESPAWN"); for (var i = 3; i > 0 && !IsOnTrack() && IsRacing; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); if (!IsOnTrack()) RespawnInProjPosRpc(); } } cachedIsOnTrack = _isOnTrack; } }
+    [Rpc(SendTo.Server)] 
+    private void SendToServerRespawnSignalRpc()
+    {
+        transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; 
+        transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); 
+        _serverPos = transform.position; 
+        RaceManager.Instance.ResetAll();
+    }
+
+    private IEnumerator CheckIsOnTrack() { var cachedIsOnTrack = true; while (true) { yield return new WaitForSeconds(0.5f); _isOnTrack = IsOnTrack(); if (!_isOnTrack && !cachedIsOnTrack && IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(true, "YOU ARE OUT OF TRACK", "SECONDS UNTIL RESPAWN"); for (var i = 3; i > 0 && !IsOnTrack() && IsRacing; i--) { if (IsOwner) UIManager.Instance.notificationTime.text = $"{i}"; yield return new WaitForSeconds(1); } if (IsRacing) { if (IsOwner) UIManager.Instance.SetNotificationCanvas(false); if (!IsOnTrack()) RespawnInProjPos(); } } cachedIsOnTrack = _isOnTrack; } }
     
     private bool IsOnTrack() { 
         return true; 
@@ -1009,7 +1031,7 @@ public class CarController : NetworkBehaviour
         clientStateBuffer?.Clear();
         clientInputBuffer?.Clear();
         serverReconciliation?.Reset();
-        RaceManager.Instance.ResetAll();
+
     }
 
     #endregion

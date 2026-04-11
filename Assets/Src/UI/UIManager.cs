@@ -63,7 +63,6 @@ public class UIManager : MonoBehaviour
     [SerializeField] public Toggle gameInterpolation; 
     [SerializeField] public Button gameExit;
 
-    // --- NEW NETWORKING FEATURES UI ---
     [Header("Networking Features")]
     [SerializeField] public Toggle clientSidePredictionToggle;
     [SerializeField] public Toggle serverReconciliationToggle;
@@ -84,13 +83,11 @@ public class UIManager : MonoBehaviour
     [SerializeField] public Text clientCollisionCountText;
     [SerializeField] public Text serverCollisionCountText;
     
-    // --- NETWORK SIMULATOR & BOT UI ---
     [Header("Debug & Simulation")]
     [SerializeField] public Slider pingSlider;       
     [SerializeField] public TMP_Text pingDisplay;    
     [SerializeField] public Toggle enableSimToggle; 
     [SerializeField] public Toggle botToggle; 
-    // -----------------------------
 
     [Header("End Game")] [SerializeField] public GameObject endGameCanvas;
     
@@ -206,14 +203,13 @@ public class UIManager : MonoBehaviour
         }
     }
     
-    // --- LAN HOST ---
     private async void OnStartHost()
     {
         await UnityServices.InitializeAsync();
         if (!AuthenticationService.Instance.IsSignedIn) await AuthenticationService.Instance.SignInAnonymouslyAsync();
 
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-        transport.SetConnectionData("0.0.0.0", 7777); 
+        transport.SetConnectionData("127.0.0.1", 7777); 
 
         GameManager.Instance.PlayerName = string.IsNullOrEmpty(menuNickname.text) ? "Host" : menuNickname.text;
         menuNickname.text = "";
@@ -221,7 +217,6 @@ public class UIManager : MonoBehaviour
         NetworkManager.Singleton.StartHost();
     }
 
-    // --- LAN CLIENT ---
     private async void OnStartClient()
     {
         await UnityServices.InitializeAsync();
@@ -332,7 +327,6 @@ public class UIManager : MonoBehaviour
 
         
 
-        // --- INIT DEAD RECKONING UI ---
         // if (drAlgorithmDropdown != null)
         // {
         //     drAlgorithmDropdown.ClearOptions();
@@ -357,7 +351,6 @@ public class UIManager : MonoBehaviour
         // if (useAdaptiveThresholdToggle != null) useAdaptiveThresholdToggle.onValueChanged.AddListener((val) => SetImprovementOption("Adaptive", val));
         // if (useTimeSyncToggle != null) useTimeSyncToggle.onValueChanged.AddListener((val) => SetImprovementOption("TimeSync", val));
         
-        // --- NETWORK SIMULATOR ---
         if (pingSlider != null)
         {
             pingSlider.minValue = 0;
@@ -375,7 +368,6 @@ public class UIManager : MonoBehaviour
         var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
         if (transport != null) transport.SetDebugSimulatorParameters(0, 0, 0);
 
-        // --- BOT TOGGLE ---
         if (botToggle != null) botToggle.isOn = false;
 
         if (botResetButton != null)
@@ -461,9 +453,6 @@ public class UIManager : MonoBehaviour
             }
         }
     }
-
-    // --- EVENT HANDLERS (WITH RESET METRICS) ---
-
     private void ResetLocalMetrics()
     {
         if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null) return;
@@ -523,7 +512,6 @@ public class UIManager : MonoBehaviour
         ResetLocalMetrics();
     }
     
-    // --- SIMULATOR LOGIC ---
     private void OnSimToggleChanged(bool enabled)
     {
         var transport = NetworkManager.Singleton.NetworkConfig.NetworkTransport as UnityTransport;
@@ -590,7 +578,6 @@ public class UIManager : MonoBehaviour
 
     private void OnBotResetClicked()
     {
-        // Tìm xe của Local Player
         if (NetworkManager.Singleton != null && NetworkManager.Singleton.SpawnManager != null)
         {
             var localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();

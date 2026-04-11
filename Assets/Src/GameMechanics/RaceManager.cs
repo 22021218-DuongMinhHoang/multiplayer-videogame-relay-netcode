@@ -340,7 +340,7 @@ public class RaceManager : MonoBehaviour
 
     [Header("Lag Compensation Settings")]
     [SerializeField] private bool ENABLE_DEBUG_LOG = true; 
-    [SerializeField] int bufferSize = 8192;
+    int bufferSize = 8192;
     float TICK_RATE = 50f;
     float rewindCooldownTime = 1f;
     private CircularBuffer<StatePayload[]> stateBuffer;
@@ -450,7 +450,6 @@ public class RaceManager : MonoBehaviour
             int rewindTick = -1;
             string triggerReason = "";
             rewindCooldownCounter = 0;
-
             while (collideTickQueue.Count > 0)
             {
                 int tick = collideTickQueue[0];
@@ -458,7 +457,7 @@ public class RaceManager : MonoBehaviour
 
                 if (serverTick - tick <= bufferSize / 100 && serverTick - tick >= 0)
                 {
-                    if (rewindTick == -1 || tick < rewindTick) {
+                    if (rewindTick == -1) {
                         rewindTick = tick;
                         triggerReason = "Collision";
                         break;
@@ -547,6 +546,8 @@ public class RaceManager : MonoBehaviour
                     }
                 }
 
+                Debug.Log($"<color=green>[Lag Compensation]</color> Start rewinding from tick {tickToProcess} to {lastTick}");
+
                 while (tickToProcess <= lastTick)
                 {
                     for (int i = 0; i < cars.Length; i++)
@@ -585,21 +586,30 @@ public class RaceManager : MonoBehaviour
                     simulatedFrames++;
                 }
 
+                // for (int i = 0; i < cars.Length; i++)
+                // {
+                //     if (cars[i] == null) continue;
+                //     CarController carReal = cars[i];
+                //     if (carReal != null)
+                //     {
+                //         carReal.SyncAfterRewind(lastTick);
+                //     }
+                // }
+
+                if (ENABLE_DEBUG_LOG)
+                    Debug.Log($"<color=green>[Lag Compensation]</color> Rewinded {simulatedFrames} frames");
+
+                // collideTickQueue.Clear();
+                // rewindTickQueue.Clear();
                 for (int i = 0; i < cars.Length; i++)
                 {
                     if (cars[i] == null) continue;
                     CarController carReal = cars[i];
                     if (carReal != null)
                     {
-                        carReal.SyncAfterRewind(lastTick);
+                        carReal.ServerSendState(carReal.GetStateOfCar(), true);
                     }
                 }
-
-                if (ENABLE_DEBUG_LOG)
-                    Debug.Log($"<color=green>[Lag Compensation]</color> Rewind hoàn tất! Đã chạy lại {simulatedFrames} frames mượt mà.");
-
-                // collideTickQueue.Clear();
-                // rewindTickQueue.Clear();
             }
             finally
             {

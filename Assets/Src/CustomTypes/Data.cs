@@ -18,6 +18,8 @@ namespace CustomTypes
 
         [SerializeField] [HideInInspector] private int collisionCount;
 
+        [SerializeField] [HideInInspector] private bool rewinded;
+
         internal Vector3 Position
         {
             get => new(_x, _y, _z);
@@ -36,7 +38,6 @@ namespace CustomTypes
             set { _vx = value.x; _vy = value.y; _vz = value.z; }
         }
 
-        // Thêm Property Acceleration
         internal Vector3 Acceleration
         {
             get => new(_ax, _ay, _az);
@@ -67,6 +68,12 @@ namespace CustomTypes
             set => collisionCount = value;
         }
 
+        internal bool Rewinded
+        {
+            get => rewinded;
+            set => rewinded = value;
+        }
+
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref _x);
@@ -93,6 +100,8 @@ namespace CustomTypes
             serializer.SerializeValue(ref speed);
 
             serializer.SerializeValue(ref collisionCount);
+
+            serializer.SerializeValue(ref rewinded);
         }
     }
 

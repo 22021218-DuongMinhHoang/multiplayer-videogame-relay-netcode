@@ -5226,7 +5226,7 @@ MonoBehaviour:
     Prefabs:
       NetworkPrefabsLists:
       - {fileID: 11400000, guid: 20cd94af179f5364f8487147a470a928, type: 2}
-    TickRate: 50
+    TickRate: 60
     ClientConnectionBufferTimeout: 10
     ConnectionApproval: 0
     ConnectionData: 
@@ -19977,7 +19977,6 @@ MonoBehaviour:
   _debugSpheres: []
   _debugRaceOrder: 
   ENABLE_DEBUG_LOG: 1
-  bufferSize: 10000
 --- !u!1 &1405243406
 GameObject:
   m_ObjectHideFlags: 0

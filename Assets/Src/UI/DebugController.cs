@@ -93,9 +93,10 @@ public class DebugController : MonoBehaviour
             try
             {
                 var currentRtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID);
+                //var currentRtt = PingManager.Instance.GetPing();
                 var ping = currentRtt - (ulong) pingCap;
                 if (ping < 0) ping = 0;
-                statRtt.text = $"{currentRtt.ToString()}ms Ping";
+                statRtt.text = $"{ping.ToString()}ms Ping";
             }
             catch (Exception)
             {
