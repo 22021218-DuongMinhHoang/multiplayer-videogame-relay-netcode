@@ -57,23 +57,24 @@ public class InputController : NetworkBehaviour
 
     public void OnAttack(InputAction.CallbackContext context)
     {
-        if (context.performed && GetComponent<NetworkPlayer>().Rockets > 0 && _carController.State != CarState.Idle &&
+        if (context.performed && _carController.State != CarState.Idle &&
             _carController.State != CarState.Dead)
         {
-            GetComponent<NetworkPlayer>().Rockets--;
-            OnAttackRpc();
+            //GetComponent<NetworkPlayer>().Rockets--;
+            //OnAttackRpc();
+            _carController.OnAttack();
         }
     }
 
-    [Rpc(SendTo.Server)]
-    private void OnAttackRpc()
-    {
-        // Spawn rocket above the car and aiming the car forward
-        var spawnPos = _carController.transform.position + new Vector3(0, 2);
-        var spawnRot = _carController.transform.rotation;
+    // [Rpc(SendTo.Server)]
+    // private void OnAttackRpc()
+    // {
+    //     // Spawn rocket above the car and aiming the car forward
+    //     var spawnPos = _carController.transform.position + new Vector3(0, 2);
+    //     var spawnRot = _carController.transform.rotation;
 
-        GameManager.Instance.SpawnRocket(spawnPos, spawnRot, GetComponent<NetworkPlayer>().Name);
-    }
+    //     GameManager.Instance.SpawnRocket(spawnPos, spawnRot, GetComponent<NetworkPlayer>().Name);
+    // }
 
     public void OnSummary(InputAction.CallbackContext context)
     {

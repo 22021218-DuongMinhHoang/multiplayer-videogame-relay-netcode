@@ -94,7 +94,7 @@ public class DebugController : MonoBehaviour
             {
                 var currentRtt = NetworkManager.Singleton.NetworkConfig.NetworkTransport.GetCurrentRtt(APP_CONFIG.GAME.SERVER_ID);
                 //var currentRtt = PingManager.Instance.GetPing();
-                var ping = currentRtt - (ulong) pingCap;
+                var ping = (int)currentRtt - pingCap;
                 if (ping < 0) ping = 0;
                 statRtt.text = $"{ping.ToString()}ms Ping";
             }

@@ -208,13 +208,21 @@ public class GameManager : MonoBehaviour
 
     #region Positioning methods
 
-    public void SpawnRocket(Vector3 position, Quaternion rotation, string playerName)
+    public ulong SpawnRocket(Vector3 position, Quaternion rotation, ulong playerId)
     {
         // Spawn rocket
         m_PrefabInstance = Instantiate(_rocketPrefab, position, rotation);
-        m_PrefabInstance.GetComponent<RocketController>().PlayerName = playerName;
+        m_PrefabInstance.GetComponent<RocketController>().PlayerName = $"Player {playerId}";
         m_SpawnedNetworkObject = m_PrefabInstance.GetComponent<NetworkObject>();
-        m_SpawnedNetworkObject.Spawn();
+        //m_SpawnedNetworkObject.Spawn();
+        m_SpawnedNetworkObject.SpawnWithOwnership(playerId);
+
+        return m_SpawnedNetworkObject.NetworkObjectId;
+    }
+
+    public void SpawnRocketClient(Vector3 position, Quaternion rotation)
+    {
+        m_PrefabInstance = Instantiate(_rocketPrefab, position, rotation);
     }
 
     public void SpawnItemBox(int num)

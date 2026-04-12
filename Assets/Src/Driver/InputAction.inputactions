@@ -1,5 +1,5 @@
 {
-    "name": "MissileRally",
+    "name": "InputAction",
     "maps": [
         {
             "name": "Player",
@@ -153,11 +153,11 @@
                 },
                 {
                     "name": "",
-                    "id": "05f6913d-c316-48b2-a6bb-e225f14c7960",
-                    "path": "<Mouse>/leftButton",
+                    "id": "9c011d8d-a18a-4063-a29f-5554feb89843",
+                    "path": "<Keyboard>/f",
                     "interactions": "",
                     "processors": "",
-                    "groups": ";Keyboard&Mouse",
+                    "groups": "",
                     "action": "Attack",
                     "isComposite": false,
                     "isPartOfComposite": false

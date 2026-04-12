@@ -14,6 +14,7 @@ public struct InputPayload : INetworkSerializable
     public float inputSteering;
     public float inputBrake;
     public bool isCollide;
+    public ulong rocketID;
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
     {
@@ -22,6 +23,7 @@ public struct InputPayload : INetworkSerializable
         serializer.SerializeValue(ref inputSteering);
         serializer.SerializeValue(ref inputBrake);
         serializer.SerializeValue(ref isCollide);
+        serializer.SerializeValue(ref rocketID);
     }
 
     public void Copy(InputPayload input)
@@ -31,6 +33,7 @@ public struct InputPayload : INetworkSerializable
         inputSteering = input.inputSteering;
         inputBrake = input.inputBrake;
         isCollide = input.isCollide;
+        rocketID = input.rocketID;
     }
 
     public override bool Equals(object obj)
@@ -40,7 +43,8 @@ public struct InputPayload : INetworkSerializable
                Mathf.Approximately(inputAcceleration, other.inputAcceleration) &&
                Mathf.Approximately(inputSteering, other.inputSteering) &&
                Mathf.Approximately(inputBrake, other.inputBrake) &&
-               isCollide == other.isCollide;
+               isCollide == other.isCollide &&
+                rocketID == other.rocketID;
     }
 
     public override int GetHashCode()
@@ -53,6 +57,7 @@ public struct InputPayload : INetworkSerializable
             hash = hash * 23 + inputSteering.GetHashCode();
             hash = hash * 23 + inputBrake.GetHashCode();
             hash = hash * 23 + (isCollide ? 1 : 0);
+            hash = hash * 23 + rocketID.GetHashCode();
             return hash;
         }
     }
@@ -322,16 +327,25 @@ public class CarController : NetworkBehaviour
 
     [Rpc(SendTo.Everyone)]
     private void MoveToPositionRpc(Vector3 pos) {
-        _rigidbody.isKinematic = true; _rigidbody.position = pos; _rigidbody.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
+        _rigidbody.isKinematic = true; 
+        _rigidbody.position = pos; 
+        _rigidbody.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
         _serverPos = pos;
         if (deadReckoningSystem != null) deadReckoningSystem.ResetSplineState(pos);
     }
 
     [Rpc(SendTo.Everyone)]
     private void ResetStatsRpc() {
-        Laps = 0; NetworkPlayer.lastLapPos = 0f; NetworkPlayer.checkpointAchieved = false; NetworkPlayer.RubberBandCoefficient = 1f;
+        Laps = 0; NetworkPlayer.lastLapPos = 0f; 
+        NetworkPlayer.checkpointAchieved = false; 
+        NetworkPlayer.RubberBandCoefficient = 1f;
         ResetCalculationMetrics();
-        if (UIManager.Instance != null) { try { UIManager.Instance.averageExportError.text = "0.00"; UIManager.Instance.hitPercentage.text = "0.0%"; 
+        if (UIManager.Instance != null) 
+        { 
+            try 
+            { 
+                UIManager.Instance.averageExportError.text = "0.00"; 
+                UIManager.Instance.hitPercentage.text = "0.0%"; 
         // UIManager.Instance.jitterEstimate.text = "0ms";
         //  UIManager.Instance.instantError.text = "0.00m"; 
          } catch (Exception) { } }
@@ -516,7 +530,7 @@ public class CarController : NetworkBehaviour
                     receiveDataCount++;
                     if (dis <= hitThreshold) _hitCount++;
 
-                    if (!IsOwner) Debug.Log($"Car:{ID} ErrorDistance: {dis}, oldState: {_rigidbody.position}, newVal: {newVal.Position}, tick: {newVal.Tick}");
+                    //if (!IsOwner && UseDeadReckoning) Debug.Log($"Car:{ID} ErrorDistance: {dis}, oldState: {_rigidbody.position}, newVal: {newVal.Position}, tick: {newVal.Tick}");
 
                     UIManager.Instance.UpdateCarAccuracy(ID, (float) _hitCount / receiveDataCount * 100f);
                 }
@@ -1018,12 +1032,15 @@ public class CarController : NetworkBehaviour
 
     void OnCollisionEnter(Collision collision)
     {
-        if (IsOwner || IsServer)
+        if (IsOwner || (IsServer && RaceManager.Instance.IsRewinding))
         {
             collisionCounter++;
+        }
+
+        if (IsOwner)
+        {
             UIManager.Instance.UpdateClientCollisionCounts(collisionCounter);
         }
-        
     }
 
     void ResetAll()
@@ -1032,6 +1049,24 @@ public class CarController : NetworkBehaviour
         clientInputBuffer?.Clear();
         serverReconciliation?.Reset();
 
+    }
+
+    public void OnAttack()
+    {
+        var spawnPos = transform.position + new Vector3(0, 2);
+        var spawnRot = transform.rotation;
+
+        GameManager.Instance.SpawnRocketClient(spawnPos, spawnRot);
+
+        OnAttackRpc(spawnPos, spawnRot, RaceManager.Instance.networkTimer.CurrentTick);
+    }
+
+    [Rpc(SendTo.Server)]
+    private void OnAttackRpc(Vector3 spawnPos, Quaternion spawnRot, int tick)
+    {
+        ulong rocketID = GameManager.Instance.SpawnRocket(spawnPos, spawnRot, OwnerClientId);
+
+        RaceManager.Instance.UpdateAttackInput(ID, rocketID, tick);
     }
 
     #endregion

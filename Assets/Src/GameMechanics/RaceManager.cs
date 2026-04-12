@@ -345,14 +345,17 @@ public class RaceManager : MonoBehaviour
     float rewindCooldownTime = 1f;
     private CircularBuffer<StatePayload[]> stateBuffer;
     public CircularBuffer<InputPayload[]> inputBuffer;
+    public CircularBuffer<Dictionary<ulong, RocketStatePayload>> rocketBuffer;
+    public Dictionary<ulong, RocketController> rocketDict = new Dictionary<ulong, RocketController>();
     int serverTick = 1;
     float rewindCooldownCounter = 0;
-    //List<int> rewindTickQueue = new();
-    List<int> collideTickQueue = new();
+    //Dictionary<int, int> rewindTickQueue = new();
+    List<int> rewindTickQueue = new();
 
     public NetworkTimer networkTimer { get; private set; }
 
     bool isRewinding = false;
+    public bool IsRewinding => isRewinding;
 
     public void PendInput(int id, InputPayload input)
     {
@@ -367,7 +370,16 @@ public class RaceManager : MonoBehaviour
             inputBuffer.Add(inputTemp, tick);
         }
 
+        ulong rocketID = 0;
+
+        if (inputTemp[id].tick != -1)
+        {
+            rocketID = inputTemp[id].rocketID;
+        }
+
         inputTemp[id] = input;
+
+        input.rocketID = rocketID;
 
         CarController car = null;
         foreach (var p in players) {
@@ -382,11 +394,52 @@ public class RaceManager : MonoBehaviour
             int carTick = networkTimer.CurrentTick;
             if (carTick - tick <= bufferSize / 10)
             {
-                if (!collideTickQueue.Contains(tick)) collideTickQueue.Add(tick);
+                if (!rewindTickQueue.Contains(tick)) rewindTickQueue.Add(tick);
             }
-            if (collideTickQueue.Count > bufferSize)
+            if (rewindTickQueue.Count > bufferSize)
             {
-                collideTickQueue.RemoveAt(0);
+                rewindTickQueue.RemoveAt(0);
+            }
+        }
+    }
+
+    public void UpdateAttackInput(int id, ulong rocketID, int tick)
+    {
+        if (id < 0 || id >= 4) return;
+
+        InputPayload[] inputTemp = inputBuffer.Get(tick);
+        
+        if (inputTemp == null)
+        {
+            inputTemp = new InputPayload[4];
+            inputTemp[id] = new InputPayload { tick = tick, rocketID = rocketID };
+            inputBuffer.Add(inputTemp, tick);
+        }
+        else
+        {
+            inputTemp[id].rocketID = rocketID;
+        }
+
+        //inputTemp[id] = input;
+
+        CarController car = null;
+        foreach (var p in players) {
+            if (p.ID == id) {
+                car = p.GetCarController;
+                break;
+            }
+        }
+
+        if (car != null)
+        {
+            int carTick = networkTimer.CurrentTick;
+            if (carTick - tick <= bufferSize / 10)
+            {
+                if (!rewindTickQueue.Contains(tick)) rewindTickQueue.Add(tick);
+            }
+            if (rewindTickQueue.Count > bufferSize)
+            {
+                rewindTickQueue.RemoveAt(0);
             }
         }
     }
@@ -415,6 +468,28 @@ public class RaceManager : MonoBehaviour
         //         rewindTickQueue.RemoveAt(0);
         //     }
         // }
+    }
+
+    
+    public void PendRocket(ulong id, RocketStatePayload rocketState, RocketController rocketController)
+    {
+        int tick = rocketState.tick;
+
+        Dictionary<ulong, RocketStatePayload> rocketTemp = rocketBuffer.Get(tick);
+        
+        if (rocketTemp == null)
+        {
+            rocketTemp = new Dictionary<ulong, RocketStatePayload>();
+            rocketTemp.Add(id, rocketState);
+            rocketBuffer.Add(rocketTemp, tick);
+        }
+
+        if (!rocketDict.ContainsKey(id))
+        {
+            rocketDict.Add(id, rocketController);
+        }
+
+        rocketTemp[id] = rocketState;
     }
 
     void FixedUpdate()
@@ -450,10 +525,10 @@ public class RaceManager : MonoBehaviour
             int rewindTick = -1;
             string triggerReason = "";
             rewindCooldownCounter = 0;
-            while (collideTickQueue.Count > 0)
+            while (rewindTickQueue.Count > 0)
             {
-                int tick = collideTickQueue[0];
-                collideTickQueue.RemoveAt(0);
+                int tick = rewindTickQueue[0];
+                rewindTickQueue.RemoveAt(0);
 
                 if (serverTick - tick <= bufferSize / 100 && serverTick - tick >= 0)
                 {
@@ -506,6 +581,7 @@ public class RaceManager : MonoBehaviour
 
             try
             {
+                List<RocketController> rocketsToRewind = new List<RocketController>();
                 CarController[] cars = new CarController[4];
                 for (int i = 0; i < players.Count; i++)
                 {
@@ -517,6 +593,13 @@ public class RaceManager : MonoBehaviour
                     {
                         carReal.ApplyState(firstState[id]);
                         cars[id] = carReal;
+                        ulong rocketID = inputBuffer.Get(tick)[id].rocketID;
+                        if (rocketID != 0 && rocketDict.ContainsKey(rocketID))
+                        {
+                            RocketController rocket = rocketDict[rocketID];
+                            rocketsToRewind.Add(rocket);
+                            rocket.OnShoot(carReal.transform.position, carReal.transform.rotation);
+                        }
                     }
                 }
 
@@ -571,6 +654,24 @@ public class RaceManager : MonoBehaviour
                         }
                     }
 
+                    foreach (var rocket in rocketsToRewind)
+                    {
+                        rocket.UpdateMovement(1f / TICK_RATE);
+                    }
+
+                    if (rocketBuffer.Get(tickToProcess) != null)
+                    {
+                        var rocketStates = rocketBuffer.Get(tickToProcess);
+                        foreach (var id in rocketStates.Keys)
+                        {
+                            if (rocketDict.ContainsKey(id))
+                            {
+                                RocketController rocket = rocketDict[id];
+                                rocket.ApplyState(rocketStates[id]);
+                            }
+                        }
+                    }
+
                     Physics.Simulate(1f / TICK_RATE);
 
                     for (int i = 0; i < cars.Length; i++)
@@ -599,7 +700,7 @@ public class RaceManager : MonoBehaviour
                 if (ENABLE_DEBUG_LOG)
                     Debug.Log($"<color=green>[Lag Compensation]</color> Rewinded {simulatedFrames} frames");
 
-                // collideTickQueue.Clear();
+                // rewindTickQueue.Clear();
                 // rewindTickQueue.Clear();
                 for (int i = 0; i < cars.Length; i++)
                 {
@@ -624,9 +725,10 @@ public class RaceManager : MonoBehaviour
         stateBuffer?.Clear();
         inputBuffer?.Clear();
         //rewindTickQueue.Clear();
-        collideTickQueue.Clear();
+        rewindTickQueue.Clear();
         isRewinding = false;
     }
+
 
     #endregion
 }
