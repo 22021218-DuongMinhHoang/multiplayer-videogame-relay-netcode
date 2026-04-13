@@ -108,6 +108,7 @@ public class RaceManager : MonoBehaviour
 
         inputBuffer = new CircularBuffer<InputPayload[]>(bufferSize);
         stateBuffer = new CircularBuffer<StatePayload[]>(bufferSize);
+        rocketBuffer = new CircularBuffer<Dictionary<ulong, RocketStatePayload>>(bufferSize);
 
         networkTimer = new NetworkTimer(TICK_RATE);
     }
@@ -470,8 +471,15 @@ public class RaceManager : MonoBehaviour
         // }
     }
 
+    public void SignUpRocket(ulong id, RocketController rocketController)
+    {
+        if (!rocketDict.ContainsKey(id))
+        {
+            rocketDict.Add(id, rocketController);
+        }
+    }
     
-    public void PendRocket(ulong id, RocketStatePayload rocketState, RocketController rocketController)
+    public void PendRocketState(ulong id, RocketStatePayload rocketState)
     {
         int tick = rocketState.tick;
 
@@ -482,11 +490,6 @@ public class RaceManager : MonoBehaviour
             rocketTemp = new Dictionary<ulong, RocketStatePayload>();
             rocketTemp.Add(id, rocketState);
             rocketBuffer.Add(rocketTemp, tick);
-        }
-
-        if (!rocketDict.ContainsKey(id))
-        {
-            rocketDict.Add(id, rocketController);
         }
 
         rocketTemp[id] = rocketState;
@@ -513,6 +516,11 @@ public class RaceManager : MonoBehaviour
                 }
                 cars.Add(car);
             }
+        }
+
+        foreach (var rocket in rocketDict.Values)
+        {
+            rocket.ProcessFixedRocketController();
         }
 
         // Server side

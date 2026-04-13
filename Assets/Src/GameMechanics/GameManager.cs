@@ -212,17 +212,26 @@ public class GameManager : MonoBehaviour
     {
         // Spawn rocket
         m_PrefabInstance = Instantiate(_rocketPrefab, position, rotation);
-        m_PrefabInstance.GetComponent<RocketController>().PlayerName = $"Player {playerId}";
+        RocketController rocket = m_PrefabInstance.GetComponent<RocketController>();
+        rocket.PlayerName = $"Player {playerId}";
         m_SpawnedNetworkObject = m_PrefabInstance.GetComponent<NetworkObject>();
         //m_SpawnedNetworkObject.Spawn();
         m_SpawnedNetworkObject.SpawnWithOwnership(playerId);
 
+        RaceManager.Instance.SignUpRocket(m_SpawnedNetworkObject.NetworkObjectId, m_PrefabInstance.GetComponent<RocketController>());
+
         return m_SpawnedNetworkObject.NetworkObjectId;
     }
+
+    int clientRocketCount = 0;
 
     public void SpawnRocketClient(Vector3 position, Quaternion rotation)
     {
         m_PrefabInstance = Instantiate(_rocketPrefab, position, rotation);
+        RaceManager.Instance.SignUpRocket((ulong)clientRocketCount, m_PrefabInstance.GetComponent<RocketController>());
+        RocketController rocket = m_PrefabInstance.GetComponent<RocketController>();
+        rocket.OnShoot(position, rotation);
+        clientRocketCount++;
     }
 
     public void SpawnItemBox(int num)

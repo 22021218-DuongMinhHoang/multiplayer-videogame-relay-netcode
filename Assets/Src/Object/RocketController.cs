@@ -4,7 +4,6 @@ using CustomTypes;
 using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
-
 public struct RocketStatePayload : INetworkSerializable
 {
     public int tick;
@@ -63,7 +62,7 @@ public class RocketController : NetworkBehaviour
         if (other.gameObject.CompareTag("Player") && car.State is CarState.Vulnerable)
         {
             if (IsServer) StartCoroutine(UpdateKills());
-            car.OnRocketHit();
+            if (!isCP) car.OnRocketHit();
         }
     }
 
@@ -74,10 +73,12 @@ public class RocketController : NetworkBehaviour
     private static AppConfig APP_CONFIG => AppConfig.Singleton;
     
     private const int TRAJECTORY_DURATION = 1;
-    //private const int SPEED = 3;
+    private const int SPEED = 3;
     private const int START_ROTATION = 65;
     private const int END_ROTATION = 115;
     private const int TRAJECTORY_LENGTH = 60;
+
+    private bool isCP = false;
 
     private readonly NetworkVariable<FixedString64Bytes> _playerName = new("default");
     private readonly NetworkVariable<PosAndRotNetworkData> _networkData = new();
@@ -102,7 +103,7 @@ public class RocketController : NetworkBehaviour
 
     private ParticleSystem vfx;
 
-    private bool UseDeadReckoning;
+    private bool UseDeadReckoning = true;
 
     private DeadReckoningSystem deadReckoningSystem;
     private ulong ID;
@@ -213,7 +214,7 @@ public class RocketController : NetworkBehaviour
 
             GetComponent<SphereCollider>().enabled = true;
             GetComponent<MeshRenderer>().enabled = false;
-            vfx.Play();
+            vfx?.Play();
 
             //StartCoroutine(Disappear());
         }
@@ -221,11 +222,13 @@ public class RocketController : NetworkBehaviour
 
     public void UpdateMovement(float dt)
     {
-        // Quaternion targetRot = Quaternion.Lerp(_startRotation, _endRotation, _elapsedTime / TRAJECTORY_DURATION);
-        // transform.Rotate(Vector3.up, 360 * Time.deltaTime * SPEED, Space.Self);
+        Quaternion targetRot = Quaternion.Lerp(_startRotation, _endRotation, _elapsedTime / TRAJECTORY_DURATION);
+        transform.Rotate(Vector3.up, 360 * Time.deltaTime * SPEED, Space.Self);
         
         Vector3 targetPosition = Vector3.Lerp(_startPosition, _endPosition, _elapsedTime / TRAJECTORY_DURATION);
         _rigidbody.MovePosition(targetPosition);
+
+        _rigidbody.MoveRotation(targetRot);
 
         if (_elapsedTime >= TRAJECTORY_DURATION)
         {
@@ -241,15 +244,21 @@ public class RocketController : NetworkBehaviour
         {
             UpdateMovement(RaceManager.Instance.networkTimer.MinTimeBetweenTicks);
             ServerSendStateRpc();
-            RaceManager.Instance.PendRocket(ID, new RocketStatePayload()
+            RaceManager.Instance.PendRocketState(ID, new RocketStatePayload()
             {
                 tick = RaceManager.Instance.networkTimer.CurrentTick,
                 time = _elapsedTime,
                 isActive = gameObject.activeSelf,
-            }, this);
+            });
         }
         else
         {
+            if (!isCP)
+            {
+                gameObject.SetActive(false);
+                NetworkObject.SynchronizeTransform = false;
+                return;
+            }
             if (UseDeadReckoning)
             {
                 Vector3 targetPos = deadReckoningSystem.CalculateTargetPosition(APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
@@ -317,12 +326,14 @@ public class RocketController : NetworkBehaviour
         _startPosition = spawnPos;
         _endPosition = spawnPos + spawnRot * Vector3.forward * TRAJECTORY_LENGTH;
 
-        transform.position = _startPosition;
-        transform.rotation = _startRotation;
+        transform.position = spawnPos;
+        transform.rotation = spawnRot;
 
         vfx = GetComponentInChildren<ParticleSystem>();
 
-        vfx.Stop();
+        if (!IsServer) isCP = true;
+
+        vfx?.Stop();
 
         deadReckoningSystem = new DeadReckoningSystem();
     }
