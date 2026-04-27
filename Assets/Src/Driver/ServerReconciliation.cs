@@ -46,8 +46,8 @@ public class ServerReconciliation
     
     public bool ShouldReconcile(float posError, float rotError, float currentSpeed, float serverSpeed)
     {
-        bool isNearlyStopped = Mathf.Abs(currentSpeed) < LOW_SPEED_THRESHOLD && 
-                              Mathf.Abs(serverSpeed) < LOW_SPEED_THRESHOLD;
+        // bool isNearlyStopped = Mathf.Abs(currentSpeed) < LOW_SPEED_THRESHOLD && 
+        //                       Mathf.Abs(serverSpeed) < LOW_SPEED_THRESHOLD;
         
         bool errorsLarge = posError > RECONCILE_POS_THRESHOLD || rotError > RECONCILE_ROT_THRESHOLD;
         

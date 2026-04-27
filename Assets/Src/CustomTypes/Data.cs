@@ -20,6 +20,8 @@ namespace CustomTypes
 
         [SerializeField] [HideInInspector] private bool rewinded;
 
+        [SerializeField] [HideInInspector] private bool isShoot;
+
         internal Vector3 Position
         {
             get => new(_x, _y, _z);
@@ -74,6 +76,12 @@ namespace CustomTypes
             set => rewinded = value;
         }
 
+        internal bool IsShoot
+        {
+            get => isShoot;
+            set => isShoot = value;
+        }
+
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref _x);
@@ -102,6 +110,8 @@ namespace CustomTypes
             serializer.SerializeValue(ref collisionCount);
 
             serializer.SerializeValue(ref rewinded);
+
+            serializer.SerializeValue(ref isShoot);
         }
     }
 

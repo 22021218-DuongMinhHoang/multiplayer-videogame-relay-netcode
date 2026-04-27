@@ -244,12 +244,12 @@ public class RocketController : NetworkBehaviour
         {
             UpdateMovement(RaceManager.Instance.networkTimer.MinTimeBetweenTicks);
             ServerSendStateRpc();
-            RaceManager.Instance.PendRocketState(ID, new RocketStatePayload()
-            {
-                tick = RaceManager.Instance.networkTimer.CurrentTick,
-                time = _elapsedTime,
-                isActive = gameObject.activeSelf,
-            });
+            // RaceManager.Instance.PendRocketState(ID, new RocketStatePayload()
+            // {
+            //     tick = RaceManager.Instance.networkTimer.CurrentTick,
+            //     time = _elapsedTime,
+            //     isActive = gameObject.activeSelf,
+            // });
         }
         else
         {

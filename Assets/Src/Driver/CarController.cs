@@ -14,7 +14,7 @@ public struct InputPayload : INetworkSerializable
     public float inputSteering;
     public float inputBrake;
     public bool isCollide;
-    public ulong rocketID;
+    public bool isShoot;
 
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
     {
@@ -23,7 +23,7 @@ public struct InputPayload : INetworkSerializable
         serializer.SerializeValue(ref inputSteering);
         serializer.SerializeValue(ref inputBrake);
         serializer.SerializeValue(ref isCollide);
-        serializer.SerializeValue(ref rocketID);
+        serializer.SerializeValue(ref isShoot);
     }
 
     public void Copy(InputPayload input)
@@ -33,7 +33,7 @@ public struct InputPayload : INetworkSerializable
         inputSteering = input.inputSteering;
         inputBrake = input.inputBrake;
         isCollide = input.isCollide;
-        rocketID = input.rocketID;
+        isShoot = input.isShoot;
     }
 
     public override bool Equals(object obj)
@@ -44,7 +44,7 @@ public struct InputPayload : INetworkSerializable
                Mathf.Approximately(inputSteering, other.inputSteering) &&
                Mathf.Approximately(inputBrake, other.inputBrake) &&
                isCollide == other.isCollide &&
-                rocketID == other.rocketID;
+                isShoot == other.isShoot;
     }
 
     public override int GetHashCode()
@@ -57,7 +57,7 @@ public struct InputPayload : INetworkSerializable
             hash = hash * 23 + inputSteering.GetHashCode();
             hash = hash * 23 + inputBrake.GetHashCode();
             hash = hash * 23 + (isCollide ? 1 : 0);
-            hash = hash * 23 + rocketID.GetHashCode();
+            hash = hash * 23 + isShoot.GetHashCode();
             return hash;
         }
     }
@@ -72,6 +72,8 @@ public struct StatePayload : INetworkSerializable
 
     public int collisionCount;
 
+    public bool isShoot;
+
     public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
     {
         serializer.SerializeValue(ref tick);
@@ -79,6 +81,7 @@ public struct StatePayload : INetworkSerializable
         serializer.SerializeValue(ref rotation);
         serializer.SerializeValue(ref speed);
         serializer.SerializeValue(ref collisionCount);
+        serializer.SerializeValue(ref isShoot);
     }
 
     public void Copy(StatePayload state)
@@ -88,6 +91,7 @@ public struct StatePayload : INetworkSerializable
         rotation = state.rotation;
         speed = state.speed;
         collisionCount = state.collisionCount;
+        isShoot = state.isShoot;
     }
 
     public override bool Equals(object obj)
@@ -99,7 +103,8 @@ public struct StatePayload : INetworkSerializable
                Vector3.Distance(position, other.position) <= posThreshold &&
                Quaternion.Angle(rotation, other.rotation) <= angThreshold &&
                Mathf.Approximately(speed, other.speed)
-               && collisionCount == other.collisionCount;
+               && collisionCount == other.collisionCount
+               && isShoot == other.isShoot;
     }
 
     public override int GetHashCode()
@@ -112,6 +117,7 @@ public struct StatePayload : INetworkSerializable
             hash = hash * 23 + rotation.GetHashCode();
             hash = hash * 23 + speed.GetHashCode();
             hash = hash * 23 + collisionCount.GetHashCode();
+            hash = hash * 23 + isShoot.GetHashCode();
             return hash;
         }
     }
@@ -263,6 +269,7 @@ public class CarController : NetworkBehaviour
 
     [Header("Visuals")]
     [SerializeField] private Transform visualTransform;
+    [SerializeField] ParticleSystem shootVFX;
 
     private bool ENABLE_DEBUG_LOG = true;
 
@@ -374,6 +381,8 @@ public class CarController : NetworkBehaviour
 
         _rigidbody = GetComponent<Rigidbody>();
 
+        shootVFX = GetComponentInChildren<ParticleSystem>();
+
         // Initialize helper systems
         clientStateBuffer = new CircularBuffer<StatePayload>(BUFFER_SIZE);
         clientInputBuffer = new CircularBuffer<InputPayload>(BUFFER_SIZE);
@@ -475,6 +484,8 @@ public class CarController : NetworkBehaviour
         }
     }
 
+    CircularBuffer<int> recievedTickBuffer = new CircularBuffer<int>(BUFFER_SIZE);
+
     private void OnNetworkDataChanged(PosAndRotNetworkData oldVal, PosAndRotNetworkData newVal) {
         if (newVal.Position == Vector3.zero) return;
         
@@ -499,7 +510,6 @@ public class CarController : NetworkBehaviour
 
             ResetAll();
         }
-
         
         float error = Vector3.Distance(transform.position, newVal.Position);
         serverReconciliation.RecordError(error);
@@ -787,6 +797,7 @@ public class CarController : NetworkBehaviour
             tempPos = stepState.position;
             tempRot = stepState.rotation;
             tempSpeed = stepState.speed;
+            stepState.isShoot = inputToProcess.isShoot;
             
             lastProcessedTick = targetTick;
             hasProcessed = true;
@@ -900,7 +911,8 @@ public class CarController : NetworkBehaviour
                 Tick = state.tick, 
                 Speed = state.speed,
                 CollisionCount = collisionCounter,
-                Rewinded = rewinded
+                Rewinded = rewinded,
+                IsShoot = state.isShoot
             };
         }
     }
@@ -1053,20 +1065,56 @@ public class CarController : NetworkBehaviour
 
     public void OnAttack()
     {
-        var spawnPos = transform.position + new Vector3(0, 2);
-        var spawnRot = transform.rotation;
+        OnCarClientShoot();
 
-        GameManager.Instance.SpawnRocketClient(spawnPos, spawnRot);
-
-        OnAttackRpc(spawnPos, spawnRot, RaceManager.Instance.networkTimer.CurrentTick);
+        OnAttackRpc(RaceManager.Instance.networkTimer.CurrentTick);
     }
 
     [Rpc(SendTo.Server)]
-    private void OnAttackRpc(Vector3 spawnPos, Quaternion spawnRot, int tick)
+    private void OnAttackRpc(int tick)
     {
-        ulong rocketID = GameManager.Instance.SpawnRocket(spawnPos, spawnRot, OwnerClientId);
+        //ulong rocketID = GameManager.Instance.SpawnRocket(spawnPos, spawnRot, OwnerClientId);
 
-        RaceManager.Instance.UpdateAttackInput(ID, rocketID, tick);
+        OnCarServerShoot();
+        RaceManager.Instance.UpdateAttackInput(ID, tick);
+    }
+
+    
+
+    public void OnCarClientShoot()
+    {
+        shootVFX?.Play();
+        Debug.Log($"Car {ID} shoots");
+    }
+
+    public void OnCarServerShoot()
+    {
+        var hits = Physics.SphereCastAll(transform.position, 3, transform.forward);
+        foreach (var hit in hits)
+        {
+            var car = hit.collider.gameObject.GetComponent<CarController>();
+            if (hit.collider.gameObject.CompareTag("Player") && car.State is CarState.Vulnerable)
+            {
+                if (IsServer) 
+                {
+                    var player = RaceManager.Instance.players[car.ID];
+                    if (player != null && car.ID != ID)
+                    {
+                        car.OnRocketHit();
+                        RaceManager.Instance.players[car.ID].Kills++;
+                        break;
+                    }
+                }
+            }
+        }
+
+        SendShootSignalToClientsRpc();
+    }
+
+    [Rpc(SendTo.NotOwner)]
+    void SendShootSignalToClientsRpc()
+    {
+        OnCarClientShoot();
     }
 
     #endregion
