@@ -22,8 +22,6 @@ public class UIManager : MonoBehaviour
     [Header("Menu")] [SerializeField] public GameObject menuCanvas;
     [SerializeField] public TMP_InputField menuNickname;
     [SerializeField] public TMP_InputField menuRoomCode; 
-    [SerializeField] public Slider menuPingSlider; // New: Ping adjustment before hosting
-    [SerializeField] public TMP_Text menuPingDisplay; // Display for ping value
     [SerializeField] public Button menuJoin;
     [SerializeField] public Button menuHost;
 
@@ -86,8 +84,15 @@ public class UIManager : MonoBehaviour
     [Header("Debug & Simulation")]
     [SerializeField] public Slider pingSlider;       
     [SerializeField] public TMP_Text pingDisplay;    
+    [SerializeField] public Slider jitterSlider;     
+    [SerializeField] public TMP_Text jitterDisplay;  
     [SerializeField] public Toggle enableSimToggle; 
     [SerializeField] public Toggle botToggle; 
+
+    [Header("Adaptive Threshold Configuration")]
+    [SerializeField] public TMP_InputField baseThresholdInput;
+    [SerializeField] public TMP_InputField kvCoefficientInput;
+    [SerializeField] public TMP_InputField kaCoefficientInput;
 
     [Header("End Game")] [SerializeField] public GameObject endGameCanvas;
     
@@ -358,6 +363,13 @@ public class UIManager : MonoBehaviour
             pingSlider.value = 0;
             pingSlider.onValueChanged.AddListener(OnPingSliderChanged);
         }
+        if (jitterSlider != null)
+        {
+            jitterSlider.minValue = 0;
+            jitterSlider.maxValue = 500;
+            jitterSlider.value = 0;
+            jitterSlider.onValueChanged.AddListener(OnJitterSliderChanged);
+        }
         if (enableSimToggle != null) 
         {
             enableSimToggle.isOn = false;
@@ -373,6 +385,22 @@ public class UIManager : MonoBehaviour
         if (botResetButton != null)
         {
             botResetButton.onClick.AddListener(OnBotResetClicked);
+        }
+
+        if (baseThresholdInput != null)
+        {
+            baseThresholdInput.text = "2.5";
+            baseThresholdInput.onEndEdit.AddListener(OnAdaptiveThresholdChanged);
+        }
+        if (kvCoefficientInput != null)
+        {
+            kvCoefficientInput.text = "0.15";
+            kvCoefficientInput.onEndEdit.AddListener(OnAdaptiveThresholdChanged);
+        }
+        if (kaCoefficientInput != null)
+        {
+            kaCoefficientInput.text = "0.25";
+            kaCoefficientInput.onEndEdit.AddListener(OnAdaptiveThresholdChanged);
         }
     }
 
@@ -533,9 +561,56 @@ public class UIManager : MonoBehaviour
         var transport = NetworkManager.Singleton.NetworkConfig.NetworkTransport as UnityTransport;
         if (transport != null) {
             float delay = ping / 2f;
-            int jitter = (int)(delay * 0.1f); 
+            int jitter = jitterSlider != null ? (int)jitterSlider.value : 0;
             transport.SetDebugSimulatorParameters(packetDelay: (int)delay, packetJitter: jitter, dropRate: 0);
-            if(pingDisplay) pingDisplay.text = $"Ping: {(int)ping}ms (Jitter: {jitter}ms)";
+            if(pingDisplay) pingDisplay.text = $"Ping: {(int)ping}ms";
+        }
+    }
+
+    private void OnJitterSliderChanged(float jitter)
+    {
+        var transport = NetworkManager.Singleton.NetworkConfig.NetworkTransport as UnityTransport;
+        if (transport != null) {
+            float delay = pingSlider != null ? pingSlider.value / 2f : 0;
+            transport.SetDebugSimulatorParameters(packetDelay: (int)delay, packetJitter: (int)jitter, dropRate: 0);
+            if(jitterDisplay) jitterDisplay.text = $"Jitter: {(int)jitter}ms";
+        }
+    }
+
+    private void OnAdaptiveThresholdChanged(string value)
+    {
+        float baseThreshold = 2.5f;
+        float kvCoeff = 0.15f;
+        float kaCoeff = 0.25f;
+
+        if (baseThresholdInput != null && float.TryParse(baseThresholdInput.text, out float bt))
+        {
+            baseThreshold = Mathf.Clamp(bt, 0.01f, 5f);
+            baseThresholdInput.text = baseThreshold.ToString("F3");
+        }
+        if (kvCoefficientInput != null && float.TryParse(kvCoefficientInput.text, out float kv))
+        {
+            kvCoeff = Mathf.Clamp(kv, 0f, 1f);
+            kvCoefficientInput.text = kvCoeff.ToString("F3");
+        }
+        if (kaCoefficientInput != null && float.TryParse(kaCoefficientInput.text, out float ka))
+        {
+            kaCoeff = Mathf.Clamp(ka, 0f, 1f);
+            kaCoefficientInput.text = kaCoeff.ToString("F3");
+        }
+
+        // Apply to all cars' dead reckoning systems
+        if (RaceManager.Instance != null && RaceManager.Instance.players != null)
+        {
+            foreach (var player in RaceManager.Instance.players)
+            {
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController != null && carController.IsOwnerCar)
+                {
+                    carController.SetAdaptiveThresholdConfig(baseThreshold, kvCoeff, kaCoeff);
+                }
+            }
         }
     }
 

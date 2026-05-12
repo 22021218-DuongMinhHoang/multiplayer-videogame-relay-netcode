@@ -49,14 +49,14 @@ public class ServerReconciliation
         // bool isNearlyStopped = Mathf.Abs(currentSpeed) < LOW_SPEED_THRESHOLD && 
         //                       Mathf.Abs(serverSpeed) < LOW_SPEED_THRESHOLD;
         
-        bool errorsLarge = posError > RECONCILE_POS_THRESHOLD || rotError > RECONCILE_ROT_THRESHOLD;
-        
+        bool errorsLarge = posError <= RECONCILE_POS_THRESHOLD && rotError <= RECONCILE_ROT_THRESHOLD;
+        //Debug.Log($"Position Error: {posError} Should Reconcile: {errorsLarge && !isRewinding}");
         return errorsLarge && !isRewinding;
     }
     
     public bool ShouldHardSnap(float posError, float rotError)
     {
-        return posError > RECONCILE_POS_THRESHOLD * 2f || rotError > RECONCILE_ROT_THRESHOLD * 2f;
+        return posError > RECONCILE_POS_THRESHOLD || rotError > RECONCILE_ROT_THRESHOLD;
     }
     
     public void StartRewinding()

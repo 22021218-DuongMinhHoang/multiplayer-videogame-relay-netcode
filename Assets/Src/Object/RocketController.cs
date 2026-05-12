@@ -261,7 +261,7 @@ public class RocketController : NetworkBehaviour
             }
             if (UseDeadReckoning)
             {
-                Vector3 targetPos = deadReckoningSystem.CalculateTargetPosition(APP_CONFIG.GAME.SMOOTH_INTERPOLATION_TIME);
+                Vector3 targetPos = deadReckoningSystem.CalculateTargetPosition();
         
                 if (deadReckoningSystem.CurrentCorrectionMode == DeadReckoningSystem.CorrectionMode.SmoothDamp)
                 {
