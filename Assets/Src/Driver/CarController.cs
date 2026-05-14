@@ -215,7 +215,7 @@ public class CarController : NetworkBehaviour
     private CircularBuffer<InputPayload> clientInputBuffer;
     private InputManager inputManager;
     private CarMovement carMovement;
-    private DeadReckoningSystem deadReckoningSystem;
+    public DeadReckoningSystem deadReckoningSystem;
     private ServerReconciliation serverReconciliation;
     private RaceTracker raceTracker;
     
@@ -223,11 +223,11 @@ public class CarController : NetworkBehaviour
     private const int BUFFER_SIZE = 1024;
     private const float TICK_RATE = 50f;
 
-    public bool _useCubicSpline 
-    { 
-        get => deadReckoningSystem?.UseCubicSpline ?? false;
-        set { if (deadReckoningSystem != null) deadReckoningSystem.UseCubicSpline = value; }
-    }
+    // public bool _useCubicSpline 
+    // { 
+    //     get => deadReckoningSystem?.UseCubicSpline ?? false;
+    //     set { if (deadReckoningSystem != null) deadReckoningSystem.UseCubicSpline = value; }
+    // }
     public bool _useAdaptiveThreshold 
     { 
         get => deadReckoningSystem?.UseAdaptiveThreshold ?? true;
@@ -242,8 +242,8 @@ public class CarController : NetworkBehaviour
     private Vector3 _serverPos;
     private Vector3 _serverVel;
     private Vector3 _serverAcc;
-    private Vector3 _prevServerVel;
     private float _lastServerRecvTime;
+    private int _lastServerStateTick = -1;
     private Vector3 _targetPos;
     private float _timeOffset = 0f;
     private const float SYNC_ALPHA = 0.05f;
@@ -266,6 +266,7 @@ public class CarController : NetworkBehaviour
     float prevVel;
     float prevAcc;
     [SerializeField] JerkCounter jerkCounter;
+    [SerializeField] JerkCounter accuracyCounter;
 
     [Header("Visuals")]
     [SerializeField] private Transform visualTransform;
@@ -338,6 +339,7 @@ public class CarController : NetworkBehaviour
         _rigidbody.position = pos; 
         _rigidbody.rotation = Quaternion.LookRotation(Vector3.forward, Vector3.up);
         _serverPos = pos;
+        ResetServerMotionSample();
         //if (deadReckoningSystem != null) deadReckoningSystem.ResetSplineState(pos);
     }
 
@@ -472,7 +474,7 @@ public class CarController : NetworkBehaviour
     public void SetImprovement(string option, bool value) {
         switch (option) {
             case "Spline":
-                if (deadReckoningSystem != null) deadReckoningSystem.UseCubicSpline = value;
+                //if (deadReckoningSystem != null) deadReckoningSystem.UseCubicSpline = value;
                 //if(value && deadReckoningSystem != null) deadReckoningSystem.ResetSplineState(transform.position);
                 break;
             case "Adaptive": 
@@ -499,12 +501,43 @@ public class CarController : NetworkBehaviour
         if (newVal.Position == Vector3.zero)
             return;
 
-        deadReckoningSystem.OnServerStateReceived(
-            newVal.Position,
-            newVal.Velocity,
-            newVal.Acceleration,
-            newVal.Timestamp
-        );
+        if (newVal.Rewinded)
+        {
+            transform.position = newVal.Position;
+            transform.rotation = Quaternion.Euler(newVal.Rotation);
+            currentSpeed = newVal.Speed;
+
+            ResetAll();
+            return;
+        }
+
+        float measuredError = -1f;
+        float rotMeasuredError = -1f;
+
+        if (!IsOwner && UseDeadReckoning)
+        {
+            Vector3 predictedAtServerTimestamp =
+                deadReckoningSystem.CalculateTargetPositionAtServerTime(newVal.Timestamp);
+
+            measuredError = Vector3.Distance(predictedAtServerTimestamp, newVal.Position);
+
+            deadReckoningSystem.OnServerStateReceived(
+                newVal.Position,
+                newVal.Velocity,
+                newVal.Acceleration,
+                newVal.Timestamp
+            );
+
+        }
+        else
+        {
+            deadReckoningSystem.OnServerStateReceived(
+                newVal.Position,
+                newVal.Velocity,
+                newVal.Acceleration,
+                newVal.Timestamp
+            );
+        }
 
         if (UseServerReconciliation && IsOwner && IsClient)
         {
@@ -517,27 +550,17 @@ public class CarController : NetworkBehaviour
         }
         else if (IsClient && !IsOwner && !UseDeadReckoning)
         {
+            measuredError = Vector3.Distance(transform.position, newVal.Position);
+
             transform.position = newVal.Position;
             transform.rotation = Quaternion.Euler(newVal.Rotation);
             currentSpeed = newVal.Speed;
-        }
-
-        if (newVal.Rewinded)
-        {
-            transform.position = newVal.Position;
-            transform.rotation = Quaternion.Euler(newVal.Rotation);
-            currentSpeed = newVal.Speed;
-
-            ResetAll();
-            return;
         }
 
         if (IsOwner)
         {
             serverCollisionCounter = newVal.CollisionCount;
         }
-
-        float measuredError = -1f;
 
         if (IsOwner && UseServerReconciliation)
         {
@@ -559,56 +582,49 @@ public class CarController : NetworkBehaviour
                     serverReconciliation.CalculateErrors(predictedState, serverState);
 
                 measuredError = positionError;
+                rotMeasuredError = rotationError;
 
                 serverReconciliation.RecordError(positionError);
-
-                // if (ENABLE_DEBUG_LOG)
-                // {
-                //     Debug.Log(
-                //         $"[Accuracy Owner] Tick: {newVal.Tick}, " +
-                //         $"PosError: {positionError:F3}, RotError: {rotationError:F3}, " +
-                //         $"PredictedPos: {predictedState.position}, ServerPos: {newVal.Position}"
-                //     );
-                // }
             }
             else
             {
-                // if (ENABLE_DEBUG_LOG)
-                // {
-                //     Debug.LogWarning(
-                //         $"[Accuracy Owner] Missing predicted state for tick {newVal.Tick}. " +
-                //         $"Buffer returned tick {predictedState.tick}."
-                //     );
-                // }
+                measuredError = -1f;
+                rotMeasuredError = -1f;
             }
-        }
-
-        else if (!IsOwner && UseDeadReckoning)
-        {
-            Vector3 targetPos = deadReckoningSystem.CalculateTargetPosition();
-            measuredError = Vector3.Distance(_rigidbody.position, targetPos);
-
-            // if (ENABLE_DEBUG_LOG)
-            // {
-            //     Debug.Log(
-            //         $"[Accuracy Remote DR] Tick: {newVal.Tick}, " +
-            //         $"Error: {measuredError:F3}, " +
-            //         $"RenderPos: {_rigidbody.position}, TargetPos: {targetPos}"
-            //     );
-            // }
-        }
-
-        else if (!IsOwner && !UseDeadReckoning)
-        {
-            measuredError = 0f;
         }
 
         if (measuredError >= 0f)
         {
             receiveDataCount++;
 
-            if (measuredError <= hitThreshold)
+            bool isHit;
+
+            if (IsOwner && UseServerReconciliation)
+            {
+                bool positionHit = measuredError <= hitThreshold;
+                bool rotationHit = rotMeasuredError >= 0f && rotMeasuredError <= 5f;
+
+                isHit = positionHit && rotationHit;
+            }
+            else
+            {
+                isHit = measuredError <= hitThreshold;
+            }
+
+            float missPercentage;
+
+            if (accuracyCounter == null)
+                return;
+
+            if (isHit)
+            {
                 _hitCount++;
+                missPercentage = accuracyCounter.Update(0);
+            }
+            else
+            {
+                missPercentage = accuracyCounter.Update(1);
+            }
 
             if (UIManager.Instance != null)
             {
@@ -616,10 +632,9 @@ public class CarController : NetworkBehaviour
                 {
                     UIManager.Instance.UpdateCarAccuracy(
                         ID,
-                        (float)_hitCount / receiveDataCount * 100f
+                        (1f - missPercentage) * 100f
                     );
-
-                    }
+                }
                 catch
                 {
                 }
@@ -650,6 +665,7 @@ public class CarController : NetworkBehaviour
         //if (deadReckoningSystem != null) deadReckoningSystem.ResetSplineState(startPos);
         _serverPos = startPos;
         _targetPos = startPos;
+        ResetServerMotionSample();
     }
 
     public (bool, int) ProcessFixedCarController()
@@ -668,10 +684,11 @@ public class CarController : NetworkBehaviour
 
         if (IsServer)
         {
-            if (!_rigidbody.isKinematic) 
-                _serverVel = _rigidbody.velocity; 
-            else 
+            if (_rigidbody.isKinematic)
+            {
+                ResetServerMotionSample();
                 _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero };
+            }
         }
         else if (IsClient && !IsOwner && !_rigidbody.isKinematic && _networkData.Value.Position != Vector3.zero)
         {
@@ -974,17 +991,18 @@ public class CarController : NetworkBehaviour
         }
         else
         {
+            float deltaTime = RaceManager.Instance.networkTimer.MinTimeBetweenTicks;
             if (deadReckoningSystem.CurrentCorrectionMode == DeadReckoningSystem.CorrectionMode.SmoothDamp)
             {
-                Vector3 smoothPos = deadReckoningSystem.SmoothDampPosition(transform.position, targetPos, deadReckoningSystem.Vel, deadReckoningSystem.PredictTime, Time.fixedDeltaTime);
+                Vector3 smoothPos = deadReckoningSystem.SmoothDampPosition(transform.position, targetPos, deadReckoningSystem.Vel, deadReckoningSystem.PredictTime, deltaTime);
                 _rigidbody.MovePosition(smoothPos);
                 _rigidbody.velocity = deadReckoningSystem.Vel;
             }
             else
             {
-                Vector3 lerpPos = deadReckoningSystem.LerpPosition(transform.position, targetPos, deadReckoningSystem.PredictTime, Time.fixedDeltaTime);
+                Vector3 lerpPos = deadReckoningSystem.LerpPosition(transform.position, targetPos, deadReckoningSystem.PredictTime, deltaTime);
                 _rigidbody.MovePosition(lerpPos);
-                _rigidbody.velocity = (lerpPos - transform.position) / Time.fixedDeltaTime;
+                _rigidbody.velocity = (lerpPos - transform.position) / deltaTime;
             }
         }
         
@@ -1056,10 +1074,27 @@ public class CarController : NetworkBehaviour
     {
         if (!_rigidbody.isKinematic)
         {
+            if (rewinded)
+            {
+                ResetServerMotionSample();
+            }
+
+            Vector3 currentVelocity = state.rotation * Vector3.forward * state.speed;
+            float deltaTime = GetServerStateDeltaTime(state.tick);
+            Vector3 acceleration = _lastServerStateTick >= 0 && deltaTime > 0.0001f
+                ? (currentVelocity - _serverVel) / deltaTime
+                : Vector3.zero;
+
+            _serverVel = currentVelocity;
+            _serverAcc = acceleration;
+            _lastServerRecvTime = Time.time;
+            _lastServerStateTick = state.tick;
+
             _networkData.Value = new PosAndRotNetworkData() {
                 Position = state.position,
                 Rotation = state.rotation.eulerAngles,
-                Velocity = _rigidbody.velocity,
+                Velocity = currentVelocity,
+                Acceleration = acceleration,
                 Timestamp = Time.time,
                 Tick = state.tick, 
                 Speed = state.speed,
@@ -1068,6 +1103,35 @@ public class CarController : NetworkBehaviour
                 IsShoot = state.isShoot
             };
         }
+    }
+
+    private float GetServerStateDeltaTime(int stateTick)
+    {
+        float tickDelta = Time.fixedDeltaTime;
+        if (RaceManager.Instance != null && RaceManager.Instance.networkTimer != null)
+        {
+            tickDelta = RaceManager.Instance.networkTimer.MinTimeBetweenTicks;
+        }
+
+        if (_lastServerStateTick >= 0 && stateTick > _lastServerStateTick)
+        {
+            return Mathf.Max((stateTick - _lastServerStateTick) * tickDelta, 0.0001f);
+        }
+
+        if (_lastServerRecvTime > 0f)
+        {
+            return Mathf.Max(Time.time - _lastServerRecvTime, tickDelta);
+        }
+
+        return tickDelta;
+    }
+
+    private void ResetServerMotionSample()
+    {
+        _serverVel = Vector3.zero;
+        _serverAcc = Vector3.zero;
+        _lastServerRecvTime = 0f;
+        _lastServerStateTick = -1;
     }
 
     public void Update()
@@ -1118,6 +1182,7 @@ public class CarController : NetworkBehaviour
         transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; 
         transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); 
         _serverPos = transform.position; 
+        ResetServerMotionSample();
         ResetAll();
         SendToServerRespawnSignalRpc();
     }
@@ -1128,6 +1193,7 @@ public class CarController : NetworkBehaviour
         transform.position = NetworkPlayer.projPos == Vector3.zero ? transform.position : NetworkPlayer.projPos; 
         transform.rotation = Quaternion.LookRotation(transform.forward, Vector3.up); 
         _serverPos = transform.position; 
+        ResetServerMotionSample();
         RaceManager.Instance.ResetAll();
     }
 
@@ -1213,6 +1279,7 @@ public class CarController : NetworkBehaviour
         clientStateBuffer?.Clear();
         clientInputBuffer?.Clear();
         serverReconciliation?.Reset();
+        ResetServerMotionSample();
 
     }
 

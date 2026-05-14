@@ -13,7 +13,6 @@ public class DeadReckoningSystem
     private Vector3 serverPos = Vector3.zero;
     private Vector3 serverVel = Vector3.zero;
     private Vector3 serverAcc = Vector3.zero;
-    private Vector3 prevServerVel = Vector3.zero;
     private float lastServerRecvTime = 0f;
     
     private Vector3 targetPos = Vector3.zero;
@@ -33,7 +32,6 @@ public class DeadReckoningSystem
     // Cấu hình
     private DeadReckoningMode currentDRMode = DeadReckoningMode.Quadratic;
     private CorrectionMode currentCorrectionMode = CorrectionMode.SmoothDamp;
-    public bool UseCubicSpline { get; set; } = false;
     public bool UseAdaptiveThreshold { get; set; } = true;
     public bool UseTimeSync { get; set; } = true;
     
@@ -91,23 +89,11 @@ public class DeadReckoningSystem
             }
         }
         
-        float dt;
-        if (!UseTimeSync)
-        {
-            dt = (lastServerRecvTime > 0f) ? now - lastServerRecvTime : 0.05f;
-        }
-        else
-        {
-            dt = (lastServerRecvTime > 0f) ? packetTime - lastServerRecvTime : 0.05f;
-        }
-
-        if (dt < 0.001f) dt = 0.05f;
         lastServerRecvTime = packetTime;
         
         serverPos = newPos;
         serverVel = newVel;
-        serverAcc = (dt > 0.0001f) ? (newVel - prevServerVel) / dt : Vector3.zero;
-        prevServerVel = newVel;
+        serverAcc = newAcc;
         
         // float interval = (lastPacketLocalTime > 0f) ? now - lastPacketLocalTime : 0f;
         // lastPacketLocalTime = now;
@@ -136,8 +122,10 @@ public class DeadReckoningSystem
         float serverTimeNow = UseTimeSync ? (now + timeOffset) : now;
 
         float rawDelta = (lastServerRecvTime > 0f) ? serverTimeNow - lastServerRecvTime : 0f;
-        predictTime = Mathf.Clamp(rawDelta + 0.05f, 0f, 0.5f);
+        //predictTime = Mathf.Clamp(rawDelta + 0.05f, 0f, 0.5f);
         
+        predictTime = (rawDelta < 0) ? 0f : rawDelta;
+
         Vector3 predicted = Vector3.zero;
         
         switch (currentDRMode)
@@ -227,7 +215,6 @@ public class DeadReckoningSystem
         serverPos = initialPos;
         serverVel = Vector3.zero;
         serverAcc = Vector3.zero;
-        prevServerVel = Vector3.zero;
         lastServerRecvTime = Time.time;
         timeOffset = 0f;
         vel = Vector3.zero;
@@ -235,5 +222,29 @@ public class DeadReckoningSystem
         //packetIntervals.Clear();
         //lastPacketLocalTime = Time.time;
         //ResetSplineState(initialPos);
+    }
+
+    public Vector3 CalculateTargetPositionAtServerTime(float targetServerTime)
+    {
+        float delta = (lastServerRecvTime > 0f) 
+            ? targetServerTime - lastServerRecvTime 
+            : 0f;
+
+        delta = Mathf.Max(0f, delta);
+
+        switch (currentDRMode)
+        {
+            case DeadReckoningMode.None:
+                return serverPos;
+
+            case DeadReckoningMode.Linear:
+                return serverPos + serverVel * delta;
+
+            case DeadReckoningMode.Quadratic:
+                return serverPos + serverVel * delta + 0.5f * serverAcc * delta * delta;
+
+            default:
+                return serverPos;
+        }
     }
 }

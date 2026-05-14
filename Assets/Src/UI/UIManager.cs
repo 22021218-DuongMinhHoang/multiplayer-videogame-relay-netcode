@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using CustomTypes;
@@ -69,6 +70,14 @@ public class UIManager : MonoBehaviour
     [Header("Car Dead Reckoning Toggles")]
     [SerializeField] public List<Toggle> carDeadReckoningToggles; // List of toggles for each car
     [SerializeField] public List<Text> carDeadReckoningLabels;
+
+    [Header("Car Dead Reckoning Mode Selection")]
+    [SerializeField] public List<TMP_Dropdown> carDRModeDropdowns; // Dropdown for Dead Reckoning Mode (None, Linear, Quadratic)
+    [SerializeField] public List<TMP_Dropdown> carCorrectionModeDropdowns; // Dropdown for Correction Mode (SmoothDamp, Lerp)
+
+    [Header("Car Dead Reckoning Settings")]
+    [SerializeField] public List<Toggle> carAdaptiveThresholdToggles; // Toggle for Adaptive Threshold per car
+    [SerializeField] public List<Toggle> carTimeSyncToggles; // Toggle for Time Sync per car
 
     [Header("Dead Reckoning Accuracy List")]
     [SerializeField] public List<Text> carAccuracyTexts; // List showing accuracy for each car
@@ -305,21 +314,55 @@ public class UIManager : MonoBehaviour
         gameLapTime.text = "--:--.---";
         gameExit.onClick.AddListener(OnExitClient);
 
-        // Initialize new networking toggles
         if (clientSidePredictionToggle != null)
         {
             clientSidePredictionToggle.onValueChanged.AddListener(OnClientSidePredictionChanged);
+
+            var players = RaceManager.Instance.players;
+            foreach (var player in players)
+            {
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController != null && carController.IsOwnerCar)
+                {
+                    clientSidePredictionToggle.isOn = carController.UseClientSidePrediction;
+                    break;
+                }
+            }
         }
         if (serverReconciliationToggle != null)
         {
             serverReconciliationToggle.onValueChanged.AddListener(OnServerReconciliationChanged);
+
+            var players = RaceManager.Instance.players;
+            foreach (var player in players)
+            {
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController != null && carController.IsOwnerCar)
+                {
+                    serverReconciliationToggle.isOn = carController.UseServerReconciliation;
+                    break;
+                }
+            }
         }
         if (lagCompensationToggle != null)
         {
             lagCompensationToggle.onValueChanged.AddListener(OnLagCompensationChanged);
+
+            var players = RaceManager.Instance.players;
+            foreach (var player in players)
+            {
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController != null && carController.IsOwnerCar)
+                {
+                    lagCompensationToggle.isOn = carController.UseLagCompensation;
+                    break;
+                }
+            }
         }
 
-        // Initialize car dead reckoning toggles
         if (carDeadReckoningToggles != null)
         {
             for (int i = 0; i < carDeadReckoningToggles.Count; i++)
@@ -327,6 +370,82 @@ public class UIManager : MonoBehaviour
                 var toggle = carDeadReckoningToggles[i];
                 int id = i;
                 toggle.onValueChanged.AddListener((enable) => OnCarDeadReckoningToggleChanged(id, enable));
+            }
+        }
+
+        if (carDRModeDropdowns != null)
+        {
+            for (int i = 0; i < carDRModeDropdowns.Count; i++)
+            {
+                var dropdown = carDRModeDropdowns[i];
+                int id = i;
+                dropdown.ClearOptions();
+                dropdown.AddOptions(Enum.GetNames(typeof(DeadReckoningSystem.DeadReckoningMode)).ToList());
+                dropdown.onValueChanged.AddListener((mode) => OnCarDRModeChanged(id, mode));
+
+                if (id < 0 || id >= RaceManager.Instance.players.Count) continue;
+                var player = RaceManager.Instance.players[id];
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController == null) continue;
+
+                dropdown.value = (int)carController.deadReckoningSystem.CurrentDRMode;
+            }
+        }
+
+        if (carCorrectionModeDropdowns != null)
+        {
+            for (int i = 0; i < carCorrectionModeDropdowns.Count; i++)
+            {
+                var dropdown = carCorrectionModeDropdowns[i];
+                int id = i;
+                dropdown.ClearOptions();
+                dropdown.AddOptions(Enum.GetNames(typeof(DeadReckoningSystem.CorrectionMode)).ToList());
+                dropdown.onValueChanged.AddListener((mode) => OnCarCorrectionModeChanged(id, mode));
+
+                if (id < 0 || id >= RaceManager.Instance.players.Count) continue;
+                var player = RaceManager.Instance.players[id];
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController == null) continue;
+
+                dropdown.value = (int)carController.deadReckoningSystem.CurrentCorrectionMode;
+            }
+        }
+
+        if (carAdaptiveThresholdToggles != null)
+        {
+            for (int i = 0; i < carAdaptiveThresholdToggles.Count; i++)
+            {
+                var toggle = carAdaptiveThresholdToggles[i];
+                int id = i;
+                toggle.onValueChanged.AddListener((enable) => OnCarAdaptiveThresholdChanged(id, enable));
+
+                if (id < 0 || id >= RaceManager.Instance.players.Count) continue;
+                var player = RaceManager.Instance.players[id];
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController == null) continue;
+
+                toggle.isOn = carController.deadReckoningSystem.UseAdaptiveThreshold;
+            }
+        }
+
+        if (carTimeSyncToggles != null)
+        {
+            for (int i = 0; i < carTimeSyncToggles.Count; i++)
+            {
+                var toggle = carTimeSyncToggles[i];
+                int id = i;
+                toggle.onValueChanged.AddListener((enable) => OnCarTimeSyncChanged(id, enable));
+                
+                if (id < 0 || id >= RaceManager.Instance.players.Count) continue;
+                var player = RaceManager.Instance.players[id];
+                if (player == null) continue;
+                CarController carController = player.GetCarController;
+                if (carController == null) continue;
+
+                toggle.isOn = carController.deadReckoningSystem.UseTimeSync;
             }
         }
 
@@ -416,6 +535,54 @@ public class UIManager : MonoBehaviour
             carController.UseDeadReckoning = enable;
             ResetLocalMetrics();
         }
+    }
+
+    private void OnCarDRModeChanged(int id, int modeIndex)
+    {
+        if (id < 0 || id >= RaceManager.Instance.players.Count) return;
+        var player = RaceManager.Instance.players[id];
+        if (player == null) return;
+        CarController carController = player.GetCarController;
+        if (carController == null) return;
+
+        // Convert dropdown index to DeadReckoningMode
+        DeadReckoningSystem.DeadReckoningMode mode = (DeadReckoningSystem.DeadReckoningMode)modeIndex;
+        carController.deadReckoningSystem?.SetDRMode(mode);
+    }
+
+    private void OnCarCorrectionModeChanged(int id, int modeIndex)
+    {
+        if (id < 0 || id >= RaceManager.Instance.players.Count) return;
+        var player = RaceManager.Instance.players[id];
+        if (player == null) return;
+        CarController carController = player.GetCarController;
+        if (carController == null) return;
+
+        carController.deadReckoningSystem?.SetCorrectionMode(modeIndex);
+    }
+
+    private void OnCarAdaptiveThresholdChanged(int id, bool enable)
+    {
+        if (id < 0 || id >= RaceManager.Instance.players.Count) return;
+        var player = RaceManager.Instance.players[id];
+        if (player == null) return;
+        CarController carController = player.GetCarController;
+        if (carController == null) return;
+
+        // Set UseAdaptiveThreshold property
+        carController.deadReckoningSystem.UseAdaptiveThreshold = enable;
+    }
+
+    private void OnCarTimeSyncChanged(int id, bool enable)
+    {
+        if (id < 0 || id >= RaceManager.Instance.players.Count) return;
+        var player = RaceManager.Instance.players[id];
+        if (player == null) return;
+        CarController carController = player.GetCarController;
+        if (carController == null) return;
+
+        // Set UseTimeSync property
+        carController.deadReckoningSystem.UseTimeSync = enable;
     }
 
     private void OnLagCompensationChanged(bool enable)
