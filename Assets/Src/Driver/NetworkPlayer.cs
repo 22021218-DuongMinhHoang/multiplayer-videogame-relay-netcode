@@ -246,7 +246,7 @@ public class NetworkPlayer : NetworkBehaviour
             _networkCarColor.OnValueChanged -= OnColorChange;
             _networkReady.OnValueChanged -= GameManager.Instance.OnPlayerReady;
             _networkReady.OnValueChanged -= SetPlayerHub;
-            _networkHasFinished.OnValueChanged -= RaceManager.Instance.OnPlayerHasFinished;
+            _networkHasFinished.OnValueChanged -= OnHasFinishedChange;
             UIManager.Instance.roomColorSlider.onValueChanged.RemoveListener(OnColorChange);
             
             if (IsOwner)
@@ -270,7 +270,7 @@ public class NetworkPlayer : NetworkBehaviour
         _networkCarColor.OnValueChanged += OnColorChange;
         _networkReady.OnValueChanged += GameManager.Instance.OnPlayerReady;
         _networkReady.OnValueChanged += SetPlayerHub;
-        _networkHasFinished.OnValueChanged += RaceManager.Instance.OnPlayerHasFinished;
+        _networkHasFinished.OnValueChanged += OnHasFinishedChange;
         UIManager.Instance.roomColorSlider.onValueChanged.AddListener(OnColorChange);
         
         if (IsOwner)
@@ -301,6 +301,11 @@ public class NetworkPlayer : NetworkBehaviour
     #endregion
 
     #region Player properties setters
+
+    private void OnHasFinishedChange(bool oldValue, bool newValue)
+    {
+        RaceManager.Instance.OnPlayerHasFinished(this, oldValue, newValue);
+    }
     
     private void SetPlayerHub(bool oldValue, bool newValue)
     {

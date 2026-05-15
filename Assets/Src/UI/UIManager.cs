@@ -112,6 +112,7 @@ public class UIManager : MonoBehaviour
     [SerializeField] [HideInInspector] private string _joinCode; 
 
     [SerializeField] public Button botResetButton;
+    [SerializeField] public Button SetAutoShootBot;
 
     public AppScreen State { get; private set; } = AppScreen.Menu;
 
@@ -389,7 +390,9 @@ public class UIManager : MonoBehaviour
                 CarController carController = player.GetCarController;
                 if (carController == null) continue;
 
-                dropdown.value = (int)carController.deadReckoningSystem.CurrentDRMode;
+                Debug.Log($"??? {(int)carController.deadReckoningSystem.CurrentDRMode}");
+
+                dropdown.SetValueWithoutNotify((int)carController.deadReckoningSystem.CurrentDRMode);
             }
         }
 
@@ -409,7 +412,8 @@ public class UIManager : MonoBehaviour
                 CarController carController = player.GetCarController;
                 if (carController == null) continue;
 
-                dropdown.value = (int)carController.deadReckoningSystem.CurrentCorrectionMode;
+                //dropdown.value = (int)carController.deadReckoningSystem.CurrentCorrectionMode;
+                dropdown.SetValueWithoutNotify((int)carController.deadReckoningSystem.CurrentCorrectionMode);
             }
         }
 
@@ -504,6 +508,13 @@ public class UIManager : MonoBehaviour
         if (botResetButton != null)
         {
             botResetButton.onClick.AddListener(OnBotResetClicked);
+        }
+
+        EnsureSetAutoShootBotButton();
+        if (SetAutoShootBot != null)
+        {
+            SetAutoShootBot.onClick.AddListener(OnSetAutoShootBotClicked);
+            UpdateAutoShootBotButtonLabel();
         }
 
         if (baseThresholdInput != null)
@@ -820,21 +831,117 @@ public class UIManager : MonoBehaviour
 
     private void OnBotResetClicked()
     {
-        if (NetworkManager.Singleton != null && NetworkManager.Singleton.SpawnManager != null)
+        CarController controller = GetLocalCarController();
+        if (controller != null)
         {
-            var localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
-            if (localPlayer != null)
+            controller.TeleportToStart();
+        }
+    }
+
+    private void OnSetAutoShootBotClicked()
+    {
+        CarController controller = GetLocalCarController();
+        if (controller == null) return;
+
+        controller.SetAutoShootBot(!controller.AutoShootBot);
+        UpdateAutoShootBotButtonLabel(controller.AutoShootBot);
+    }
+
+    private CarController GetLocalCarController()
+    {
+        if (NetworkManager.Singleton == null || NetworkManager.Singleton.SpawnManager == null)
+            return null;
+
+        var localPlayer = NetworkManager.Singleton.SpawnManager.GetLocalPlayerObject();
+        if (localPlayer == null) return null;
+
+        var playerScript = localPlayer.GetComponent<NetworkPlayer>();
+        if (playerScript == null || playerScript.car == null) return null;
+
+        return playerScript.car.GetComponent<CarController>();
+    }
+
+    private void EnsureSetAutoShootBotButton()
+    {
+        if (SetAutoShootBot != null || gameCanvas == null) return;
+
+        if (botResetButton != null)
+        {
+            GameObject buttonObject = Instantiate(botResetButton.gameObject, botResetButton.transform.parent);
+            buttonObject.name = "SetAutoShootBot";
+            buttonObject.SetActive(true);
+
+            RectTransform rect = buttonObject.GetComponent<RectTransform>();
+            if (rect != null)
             {
-                var playerScript = localPlayer.GetComponent<NetworkPlayer>();
-                if (playerScript != null && playerScript.car != null)
-                {
-                    var controller = playerScript.car.GetComponent<CarController>();
-                    if (controller != null)
-                    {
-                        controller.TeleportToStart();
-                    }
-                }
+                rect.anchoredPosition += new Vector2(0f, 36f);
+                rect.sizeDelta = new Vector2(190f, rect.sizeDelta.y);
             }
+
+            SetAutoShootBot = buttonObject.GetComponent<Button>();
+            if (SetAutoShootBot != null)
+            {
+                SetAutoShootBot.onClick.RemoveAllListeners();
+            }
+
+            TMP_Text tmpText = buttonObject.GetComponentInChildren<TMP_Text>(true);
+            if (tmpText != null)
+            {
+                tmpText.fontSize = 18f;
+            }
+
+            return;
+        }
+
+        GameObject fallbackObject = new GameObject("SetAutoShootBot", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Button));
+        fallbackObject.transform.SetParent(gameCanvas.transform, false);
+
+        RectTransform fallbackRect = fallbackObject.GetComponent<RectTransform>();
+        fallbackRect.anchorMin = new Vector2(0.5f, 0f);
+        fallbackRect.anchorMax = new Vector2(0.5f, 0f);
+        fallbackRect.anchoredPosition = new Vector2(196.8f, 251f);
+        fallbackRect.sizeDelta = new Vector2(180f, 30f);
+
+        Image image = fallbackObject.GetComponent<Image>();
+        image.color = Color.white;
+
+        SetAutoShootBot = fallbackObject.GetComponent<Button>();
+        SetAutoShootBot.targetGraphic = image;
+
+        GameObject textObject = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        textObject.transform.SetParent(fallbackObject.transform, false);
+
+        RectTransform textRect = textObject.GetComponent<RectTransform>();
+        textRect.anchorMin = Vector2.zero;
+        textRect.anchorMax = Vector2.one;
+        textRect.offsetMin = Vector2.zero;
+        textRect.offsetMax = Vector2.zero;
+
+        Text text = textObject.GetComponent<Text>();
+        text.alignment = TextAnchor.MiddleCenter;
+        text.color = new Color(0.196f, 0.196f, 0.196f, 1f);
+        text.fontSize = 18;
+        text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+    }
+
+    private void UpdateAutoShootBotButtonLabel(bool? enabledOverride = null)
+    {
+        if (SetAutoShootBot == null) return;
+
+        bool enabled = enabledOverride ?? GetLocalCarController()?.AutoShootBot ?? false;
+        string label = enabled ? "Auto Shoot: ON" : "Auto Shoot: OFF";
+
+        TMP_Text tmpText = SetAutoShootBot.GetComponentInChildren<TMP_Text>(true);
+        if (tmpText != null)
+        {
+            tmpText.text = label;
+            return;
+        }
+
+        Text text = SetAutoShootBot.GetComponentInChildren<Text>(true);
+        if (text != null)
+        {
+            text.text = label;
         }
     }
 

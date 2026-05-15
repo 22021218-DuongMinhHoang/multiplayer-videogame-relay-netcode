@@ -25,6 +25,8 @@ public class RaceManager : MonoBehaviour
     [SerializeField] [HideInInspector] private NetworkPlayer[] _cachedPos = new NetworkPlayer[APP_CONFIG.GAME.MAX_PLAYERS_PER_ROOM];
     [SerializeField] [HideInInspector] private GameObject[] _debugSpheres;
     [SerializeField] [HideInInspector] private string _debugRaceOrder;
+    private readonly HashSet<int> _loggedFinishedPlayerIds = new();
+    private readonly HashSet<int> _suppressedFinishLogPlayerIds = new();
 
     private bool IsRacing => UIManager.Instance.State is AppScreen.Game or AppScreen.EndGame;
     
@@ -37,12 +39,14 @@ public class RaceManager : MonoBehaviour
     public delegate void PlayerLeft(NetworkPlayer networkPlayer);
     public event PlayerLeft OnPlayerLeft;
 
-    public void OnPlayerHasFinished(bool oldValue, bool newValue)
+    public void OnPlayerHasFinished(NetworkPlayer player, bool oldValue, bool newValue)
     {
         if (newValue)
         {
+            LogPlayerFinish(player);
+
             var finished = true;
-            foreach (var player in players) finished &= player.HasFinished;
+            foreach (var racingPlayer in players) finished &= racingPlayer != null && racingPlayer.HasFinished;
 
             if (finished)
             {
@@ -50,6 +54,34 @@ public class RaceManager : MonoBehaviour
                 GameManager.Instance.State = GameState.Finished;
                 StartCoroutine(RaceEndCountdown());
             }
+        }
+    }
+
+    public void LogPlayerFinish(NetworkPlayer player)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        if (_suppressedFinishLogPlayerIds.Remove(player.ID))
+        {
+            return;
+        }
+
+        if (!_loggedFinishedPlayerIds.Add(player.ID))
+        {
+            return;
+        }
+
+        RaceFinishLogger.LogFinish(player);
+    }
+
+    public void SuppressNextFinishLog(NetworkPlayer player)
+    {
+        if (player != null)
+        {
+            _suppressedFinishLogPlayerIds.Add(player.ID);
         }
     }
     
@@ -76,7 +108,12 @@ public class RaceManager : MonoBehaviour
 
     private void OnGameStateChange(GameState oldState, GameState newState)
     {
-        if (newState == GameState.Started) foreach (var player in waitList) AddToPlayers(player);
+        if (newState == GameState.Started)
+        {
+            _loggedFinishedPlayerIds.Clear();
+            _suppressedFinishLogPlayerIds.Clear();
+            foreach (var player in waitList) AddToPlayers(player);
+        }
     }
 
     #endregion

@@ -12,10 +12,11 @@ public class JerkCounter
     Queue<float> jerkQueue = new();
 
     public float highestJerk { get; private set; }
+    public float AverageValue => avgJerk;
     float avgJerk;
     
     
-    public float Update(float jerk)
+    public float Update(float jerk, bool updateHighestJerkUi = false)
     {
         if (jerkQueue.Count < windowSize)
         {
@@ -39,11 +40,21 @@ public class JerkCounter
             if (jerk > highestJerk)
             {
                 highestJerk = jerk;
-                UIManager.Instance.highestJerk.text = $"{(int)highestJerk}";
+                if (updateHighestJerkUi && UIManager.Instance != null && UIManager.Instance.highestJerk != null)
+                {
+                    UIManager.Instance.highestJerk.text = $"{(int)highestJerk}";
+                }
             }
         }
 
         return avgJerk;
+    }
+
+    public void Reset()
+    {
+        jerkQueue.Clear();
+        highestJerk = 0f;
+        avgJerk = 0f;
     }
 }
 

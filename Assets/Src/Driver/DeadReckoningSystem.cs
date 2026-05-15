@@ -44,11 +44,14 @@ public class DeadReckoningSystem
     // Metrics
     // private List<float> packetIntervals = new List<float>();
     // private float lastPacketLocalTime = 0f;
+
+    float adaptedThreshold = 2.5f;
     
     public DeadReckoningMode CurrentDRMode => currentDRMode;
     public CorrectionMode CurrentCorrectionMode => currentCorrectionMode;
     public Vector3 TargetPos => targetPos;
     public Vector3 Vel => vel;
+    public Vector3 ServerVel => serverVel;
     
     public float BaseErrorThreshold => baseErrorThreshold;
     public float VelocityCoefficient => velocityCoefficientKv;
@@ -122,9 +125,9 @@ public class DeadReckoningSystem
         float serverTimeNow = UseTimeSync ? (now + timeOffset) : now;
 
         float rawDelta = (lastServerRecvTime > 0f) ? serverTimeNow - lastServerRecvTime : 0f;
-        //predictTime = Mathf.Clamp(rawDelta + 0.05f, 0f, 0.5f);
+        predictTime = Mathf.Clamp(rawDelta, 0f, 0.5f);
         
-        predictTime = (rawDelta < 0) ? 0f : rawDelta;
+        //predictTime = (rawDelta < 0) ? 0f : rawDelta;
 
         Vector3 predicted = Vector3.zero;
         
@@ -185,21 +188,23 @@ public class DeadReckoningSystem
                                   (velocityCoefficientKv * velocityMagnitude * P) +
                                   (accelerationCoefficientKa * accelerationMagnitude * P * P);
         
-        return Mathf.Clamp(adaptiveThreshold, baseErrorThreshold, 5.0f);
+        adaptedThreshold = Mathf.Clamp(adaptiveThreshold, baseErrorThreshold, baseErrorThreshold * 4f);
+
+        return adaptedThreshold;
     }
     
+    float currentError = 0;
     public bool ShouldHardSnap(Vector3 currentPos, Vector3 predictedPos)
     {
+        currentError = Vector3.Distance(currentPos, predictedPos);
         if (!UseAdaptiveThreshold)
         {
-            return Vector3.Distance(currentPos, predictedPos) > baseErrorThreshold;
+            return currentError > baseErrorThreshold;
         }
-        
-        float error = Vector3.Distance(currentPos, predictedPos);
         
         float threshold = CalculateAdaptiveThreshold();
         
-        return error > threshold;
+        return currentError > threshold;
     }
     
     
@@ -217,6 +222,7 @@ public class DeadReckoningSystem
         serverAcc = Vector3.zero;
         lastServerRecvTime = Time.time;
         timeOffset = 0f;
+        timeOffsetInitialized = false;
         vel = Vector3.zero;
         targetPos = initialPos;
         //packetIntervals.Clear();

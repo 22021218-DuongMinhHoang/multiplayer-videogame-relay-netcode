@@ -197,6 +197,14 @@ public class CarController : NetworkBehaviour
     private int currentWaypointIndex = 0;
     private float waypointThreshold = 5.0f;
 
+    [Header("Auto Shoot Bot")]
+    [SerializeField] public bool AutoShootBot = false;
+    [SerializeField] private float autoShootRange = 35f;
+    [SerializeField] private float autoShootRadius = 3f;
+    [SerializeField] private float autoShootCooldown = 0.35f;
+    [SerializeField] private float autoShootMinForwardDistance = 2f;
+    private float nextAutoShootTime = 0f;
+
     public bool UseDeadReckoning = true;
     public bool UseServerReconciliation = true;
     public bool UseClientSidePrediction = true;
@@ -279,6 +287,9 @@ public class CarController : NetworkBehaviour
     private bool IsRacing => State != CarState.Dead && State != CarState.Idle;
     private bool IsRace => GameManager.Instance.CLASSIF_STATES.Contains(NetworkPlayer.CurrentRace);
     private bool IsClassif => GameManager.Instance.RACE_STATES.Contains(NetworkPlayer.CurrentRace);
+    public float CurrentAverageAccuracyPercent => accuracyCounter != null ? accuracyCounter.AverageValue * 100f : 0f;
+    public float CurrentAverageJerk => jerkCounter != null ? jerkCounter.AverageValue / 1000f : 0f;
+    public int CurrentKills => kills;
     public int GetLastProcessedTick() => lastProcessedTick;
 
     #endregion
@@ -295,7 +306,15 @@ public class CarController : NetworkBehaviour
         if (newVal.Equals(GameManager.Instance.NumLaps + 1)) SetPlayerEndGame();
         else if (newVal <= GameManager.Instance.NumLaps + 1) UIManager.Instance.gameLaps.text = $"{newVal}/{GameManager.Instance.NumLaps}";
     }
-    private void OnPlayerLeft(NetworkPlayer networkPlayer) { if (NetworkPlayer.Equals(networkPlayer)) return; if (RaceManager.Instance.players.Count == 1) SetPlayerEndGame(); }
+    private void OnPlayerLeft(NetworkPlayer networkPlayer)
+    {
+        if (NetworkPlayer.Equals(networkPlayer)) return;
+        if (RaceManager.Instance.players.Count == 1)
+        {
+            RaceManager.Instance.SuppressNextFinishLog(NetworkPlayer);
+            SetPlayerEndGame(logFinish: false);
+        }
+    }
 
     private void OnScreenChange(AppScreen screen) {
         if (screen.Equals(AppScreen.Game)) {
@@ -364,6 +383,10 @@ public class CarController : NetworkBehaviour
     {
         if (serverReconciliation != null)
             serverReconciliation.ResetMetrics();
+
+        receiveDataCount = 0;
+        _hitCount = 0;
+        accuracyCounter?.Reset();
     }
 
     private void OnRocketChange(int newVal) { rocketTag.text = newVal.ToString(); }
@@ -459,6 +482,12 @@ public class CarController : NetworkBehaviour
         }
     }
 
+    public void SetAutoShootBot(bool enable)
+    {
+        AutoShootBot = enable;
+        nextAutoShootTime = 0f;
+    }
+
     public void SetDRMode(DeadReckoningSystem.DeadReckoningMode mode) 
     { 
         currentDRMode = mode;
@@ -514,7 +543,7 @@ public class CarController : NetworkBehaviour
         float measuredError = -1f;
         float rotMeasuredError = -1f;
 
-        if (!IsOwner && UseDeadReckoning)
+        if (!IsOwner)
         {
             Vector3 predictedAtServerTimestamp =
                 deadReckoningSystem.CalculateTargetPositionAtServerTime(newVal.Timestamp);
@@ -539,7 +568,7 @@ public class CarController : NetworkBehaviour
             );
         }
 
-        if (UseServerReconciliation && IsOwner && IsClient)
+        if (IsOwner && IsClient)
         {
             serverReconciliation.RecordServerState(
                 newVal.Tick,
@@ -548,12 +577,15 @@ public class CarController : NetworkBehaviour
                 newVal.Speed
             );
         }
-        else if (IsClient && !IsOwner && !UseDeadReckoning)
+        else if (IsClient && !IsOwner)
         {
-            measuredError = Vector3.Distance(transform.position, newVal.Position);
+            if (!UseDeadReckoning)
+            {
+                measuredError = Vector3.Distance(transform.position, newVal.Position);
+                transform.position = newVal.Position;
+                transform.rotation = Quaternion.Euler(newVal.Rotation);
+            }
 
-            transform.position = newVal.Position;
-            transform.rotation = Quaternion.Euler(newVal.Rotation);
             currentSpeed = newVal.Speed;
         }
 
@@ -562,7 +594,7 @@ public class CarController : NetworkBehaviour
             serverCollisionCounter = newVal.CollisionCount;
         }
 
-        if (IsOwner && UseServerReconciliation)
+        if (IsOwner)
         {
             StatePayload predictedState = clientStateBuffer.Get(newVal.Tick);
 
@@ -599,7 +631,7 @@ public class CarController : NetworkBehaviour
 
             bool isHit;
 
-            if (IsOwner && UseServerReconciliation)
+            if (IsOwner)
             {
                 bool positionHit = measuredError <= hitThreshold;
                 bool rotationHit = rotMeasuredError >= 0f && rotMeasuredError <= 5f;
@@ -611,20 +643,24 @@ public class CarController : NetworkBehaviour
                 isHit = measuredError <= hitThreshold;
             }
 
-            float missPercentage;
-
             if (accuracyCounter == null)
                 return;
 
             if (isHit)
             {
                 _hitCount++;
-                missPercentage = accuracyCounter.Update(0);
             }
-            else
+
+            float positionAccuracy = Mathf.Clamp01(1f - measuredError / hitThreshold);
+            float sampleAccuracy = positionAccuracy;
+
+            if (IsOwner && rotMeasuredError >= 0f)
             {
-                missPercentage = accuracyCounter.Update(1);
+                float rotationAccuracy = Mathf.Clamp01(1f - rotMeasuredError / 5f);
+                sampleAccuracy = Mathf.Min(positionAccuracy, rotationAccuracy);
             }
+
+            float averageAccuracy = accuracyCounter.Update(sampleAccuracy);
 
             if (UIManager.Instance != null)
             {
@@ -632,7 +668,7 @@ public class CarController : NetworkBehaviour
                 {
                     UIManager.Instance.UpdateCarAccuracy(
                         ID,
-                        (1f - missPercentage) * 100f
+                        averageAccuracy * 100f
                     );
                 }
                 catch
@@ -986,7 +1022,8 @@ public class CarController : NetworkBehaviour
         if (deadReckoningSystem.ShouldHardSnap(_rigidbody.position, targetPos))
         {
             _rigidbody.MovePosition(targetPos);
-            _rigidbody.velocity = deadReckoningSystem.Vel;
+            _rigidbody.velocity = deadReckoningSystem.ServerVel;
+            _rigidbody.MoveRotation(Quaternion.Euler(_networkData.Value.Rotation));
             return;
         }
         else
@@ -1142,6 +1179,11 @@ public class CarController : NetworkBehaviour
         //     visualTransform.rotation = Quaternion.Slerp(visualTransform.rotation, transform.rotation, Time.deltaTime * 15f);
         // }
 
+        if (IsOwner && AutoShootBot)
+        {
+            TryAutoShootBot();
+        }
+
         if (IsServer && IsSpawned)
         {
             var iSpeed = Mathf.FloorToInt(_rigidbody.velocity.magnitude);
@@ -1149,12 +1191,52 @@ public class CarController : NetworkBehaviour
         }
     }
 
+    private void TryAutoShootBot()
+    {
+        if (Time.time < nextAutoShootTime) return;
+        if (_rigidbody == null || _rigidbody.isKinematic) return;
+        if (State == CarState.Idle || State == CarState.Dead) return;
+
+        if (!HasAutoShootTargetAhead()) return;
+
+        nextAutoShootTime = Time.time + autoShootCooldown;
+        OnAttack();
+    }
+
+    private bool HasAutoShootTargetAhead()
+    {
+        Vector3 origin = transform.position + Vector3.up * 0.5f;
+        RaycastHit[] hits = Physics.SphereCastAll(
+            origin,
+            autoShootRadius,
+            transform.forward,
+            autoShootRange,
+            ~0,
+            QueryTriggerInteraction.Ignore
+        );
+
+        foreach (RaycastHit hit in hits)
+        {
+            CarController car = hit.collider.GetComponentInParent<CarController>();
+            if (car == null || car == this || car.ID == ID) continue;
+            if (!hit.collider.CompareTag("Player") && !car.CompareTag("Player")) continue;
+
+            Vector3 toCar = car.transform.position - transform.position;
+            float forwardDistance = Vector3.Dot(transform.forward, toCar);
+            if (forwardDistance < autoShootMinForwardDistance || forwardDistance > autoShootRange) continue;
+
+            return true;
+        }
+
+        return false;
+    }
+
     private void CalculateJerk() {
-        float dt = 1f;
+        float dt = RaceManager.Instance.networkTimer.MinTimeBetweenTicks;
         float vel = Vector3.Distance(transform.position, prevPos) / dt; prevPos = transform.position;
         float acc = Mathf.Abs(vel - prevVel) / dt; prevVel = vel;
         float jerk = Mathf.Abs(acc - prevAcc) / dt; prevAcc = acc;
-        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerkCounter.Update(jerk) * 100f);
+        if(jerkCounter != null) UIManager.Instance.UpdateCarJerk(ID, jerkCounter.Update(jerk, true) / 1000);
     }
     #endregion
 
@@ -1172,7 +1254,19 @@ public class CarController : NetworkBehaviour
     [Rpc(SendTo.Everyone)] private void SwitchVisibilityRpc(bool toVisible = true) { PlayerPanel.SetActive(toVisible); _rigidbody.excludeLayers = toVisible ? 0: LayerMask.GetMask("Player"); foreach (var mesh in carMeshes) mesh.enabled = toVisible; }
     [Rpc(SendTo.NotMe)] private void SwitchToInvisibleExceptMeRpc() { PlayerPanel.SetActive(false); _rigidbody.excludeLayers = LayerMask.GetMask("Player"); foreach (var mesh in carMeshes) mesh.enabled = false; }
 
-    private void SetPlayerEndGame() { State = CarState.Idle; StopCoroutine(CheckIsOnTrack()); MoveToPositionRpc(GameManager.Instance.GetPlayerPosById(ID)); NetworkPlayer.FinishRawTime = GameManager.Instance.raceTime; NetworkPlayer.HasFinished = true; UIManager.Instance.gameOverallTime.text = "--:--.---"; UIManager.Instance.gameLapTime.text = "--:--.---"; UIManager.Instance.matchSummaryController.HasFinished = true; EventManager.Instance.RaiseScreenChange(AppScreen.EndGame); }
+    private void SetPlayerEndGame(bool logFinish = true)
+    {
+        State = CarState.Idle;
+        StopCoroutine(CheckIsOnTrack());
+        MoveToPositionRpc(GameManager.Instance.GetPlayerPosById(ID));
+        NetworkPlayer.FinishRawTime = GameManager.Instance.raceTime;
+        NetworkPlayer.HasFinished = true;
+        if (logFinish) RaceManager.Instance.LogPlayerFinish(NetworkPlayer);
+        UIManager.Instance.gameOverallTime.text = "--:--.---";
+        UIManager.Instance.gameLapTime.text = "--:--.---";
+        UIManager.Instance.matchSummaryController.HasFinished = true;
+        EventManager.Instance.RaiseScreenChange(AppScreen.EndGame);
+    }
     public void SetMainMeshMaterialColor(Color color) { carMeshes[0].materials[1].color = color; }
     public void SetPlayerTag(int pos, string playerName) { playerTag.text = pos == -1 ? $"Ready | {NetworkPlayer.Name}" : $"{pos} | {playerName}"; }
 
@@ -1295,15 +1389,12 @@ public class CarController : NetworkBehaviour
             var car = hit.collider.gameObject.GetComponent<CarController>();
             if (hit.collider.gameObject.CompareTag("Player") && car.State is CarState.Vulnerable)
             {
-                if (IsServer) 
+                var player = RaceManager.Instance.players[car.ID];
+                if (player != null && car.ID != ID)
                 {
-                    var player = RaceManager.Instance.players[car.ID];
-                    if (player != null && car.ID != ID)
-                    {
-                        kills++;
-                        UIManager.Instance.UpdateClientCollisionCounts(kills);
-                        break;
-                    }
+                    kills++;
+                    UIManager.Instance.UpdateClientCollisionCounts(kills);
+                    break;
                 }
             }
         }
