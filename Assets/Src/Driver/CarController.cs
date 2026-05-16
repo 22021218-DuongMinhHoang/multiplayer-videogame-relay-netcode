@@ -123,6 +123,24 @@ public struct StatePayload : INetworkSerializable
     }
 }
 
+public struct ShootContext : INetworkSerializable
+{
+    public bool hasTarget;
+    public int targetId;
+    public Vector3 shooterPosition;
+    public Vector3 shooterForward;
+    public Vector3 targetPosition;
+
+    public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
+    {
+        serializer.SerializeValue(ref hasTarget);
+        serializer.SerializeValue(ref targetId);
+        serializer.SerializeValue(ref shooterPosition);
+        serializer.SerializeValue(ref shooterForward);
+        serializer.SerializeValue(ref targetPosition);
+    }
+}
+
 [Serializable]
 public class CarController : NetworkBehaviour
 {
@@ -198,12 +216,13 @@ public class CarController : NetworkBehaviour
     private float waypointThreshold = 5.0f;
 
     [Header("Auto Shoot Bot")]
-    [SerializeField] public bool AutoShootBot = false;
-    [SerializeField] private float autoShootRange = 35f;
-    [SerializeField] private float autoShootRadius = 3f;
-    [SerializeField] private float autoShootCooldown = 0.35f;
-    [SerializeField] private float autoShootMinForwardDistance = 2f;
+    public bool AutoShootBot = false;
+    private float autoShootRange = 35f;
+    private float autoShootRadius = 3f;
+    private float autoShootCooldown = 5f;
+    private float autoShootMinForwardDistance = 2f;
     private float nextAutoShootTime = 0f;
+    private const float shootMinForwardDistance = 0.25f;
 
     public bool UseDeadReckoning = true;
     public bool UseServerReconciliation = true;
@@ -211,6 +230,9 @@ public class CarController : NetworkBehaviour
     public bool UseLagCompensation = true;
 
     public bool IsOwnerCar => IsOwner;
+    private bool UsesOwnerAuthoritativeFallback =>
+        IsClient && IsOwner && !IsServer && !UseClientSidePrediction && !UseServerReconciliation;
+    private bool ShouldOwnerUseDeadReckoning => UsesOwnerAuthoritativeFallback && UseDeadReckoning;
 
     [Header("Dead Reckoning Configuration")]
     [SerializeField] private DeadReckoningSystem.DeadReckoningMode currentDRMode = DeadReckoningSystem.DeadReckoningMode.Quadratic;
@@ -291,6 +313,8 @@ public class CarController : NetworkBehaviour
     public float CurrentAverageJerk => jerkCounter != null ? jerkCounter.AverageValue / 1000f : 0f;
     public int CurrentKills => kills;
     public int GetLastProcessedTick() => lastProcessedTick;
+
+    private int ShootDebugTick => RaceManager.Instance?.networkTimer?.CurrentTick ?? -1;
 
     #endregion
 
@@ -486,6 +510,44 @@ public class CarController : NetworkBehaviour
     {
         AutoShootBot = enable;
         nextAutoShootTime = 0f;
+        if (AutoShootBot)
+        {
+            SetAutoShootBotPose();
+        }
+
+        SendAutoShootBotStateToServerRpc(enable);
+    }
+
+    [Rpc(SendTo.Server)]
+    void SendAutoShootBotStateToServerRpc(bool enable)
+    {
+        AutoShootBot = enable;
+        if (AutoShootBot)
+        {
+            SetAutoShootBotPose();
+            int tick = RaceManager.Instance?.networkTimer?.CurrentTick ?? lastProcessedTick;
+            lastProcessedTick = tick;
+            RaceManager.Instance?.PendState(ID, GetStateOfCar(tick));
+        }
+    }
+
+    private void SetAutoShootBotPose()
+    {
+        if (GameManager.Instance == null || GameManager.Instance.botShootPoint == null) return;
+
+        Vector3 botPosition = GameManager.Instance.botShootPoint.position;
+        Quaternion botRotation = Quaternion.Euler(0f, 90f, 0f);
+
+        if (_rigidbody != null)
+        {
+            _rigidbody.position = botPosition;
+            _rigidbody.rotation = botRotation;
+            _rigidbody.velocity = Vector3.zero;
+            _rigidbody.angularVelocity = Vector3.zero;
+        }
+
+        transform.SetPositionAndRotation(botPosition, botRotation);
+        currentSpeed = 0f;
     }
 
     public void SetDRMode(DeadReckoningSystem.DeadReckoningMode mode) 
@@ -542,31 +604,27 @@ public class CarController : NetworkBehaviour
 
         float measuredError = -1f;
         float rotMeasuredError = -1f;
+        bool usesOwnerAuthoritativeFallback = UsesOwnerAuthoritativeFallback;
 
-        if (!IsOwner)
+        if (!IsOwner || ShouldOwnerUseDeadReckoning)
         {
             Vector3 predictedAtServerTimestamp =
                 deadReckoningSystem.CalculateTargetPositionAtServerTime(newVal.Timestamp);
 
             measuredError = Vector3.Distance(predictedAtServerTimestamp, newVal.Position);
 
-            deadReckoningSystem.OnServerStateReceived(
-                newVal.Position,
-                newVal.Velocity,
-                newVal.Acceleration,
-                newVal.Timestamp
-            );
+            if (ShouldOwnerUseDeadReckoning)
+            {
+                rotMeasuredError = Quaternion.Angle(transform.rotation, Quaternion.Euler(newVal.Rotation));
+            }
+        }
 
-        }
-        else
-        {
-            deadReckoningSystem.OnServerStateReceived(
-                newVal.Position,
-                newVal.Velocity,
-                newVal.Acceleration,
-                newVal.Timestamp
-            );
-        }
+        deadReckoningSystem.OnServerStateReceived(
+            newVal.Position,
+            newVal.Velocity,
+            newVal.Acceleration,
+            newVal.Timestamp
+        );
 
         if (IsOwner && IsClient)
         {
@@ -576,14 +634,26 @@ public class CarController : NetworkBehaviour
                 Quaternion.Euler(newVal.Rotation),
                 newVal.Speed
             );
+
+            if (usesOwnerAuthoritativeFallback)
+            {
+                currentSpeed = newVal.Speed;
+                collisionCounter = newVal.CollisionCount;
+
+                if (!UseDeadReckoning)
+                {
+                    measuredError = Vector3.Distance(transform.position, newVal.Position);
+                    rotMeasuredError = Quaternion.Angle(transform.rotation, Quaternion.Euler(newVal.Rotation));
+                    ApplyNetworkStateDirectly(newVal);
+                }
+            }
         }
         else if (IsClient && !IsOwner)
         {
             if (!UseDeadReckoning)
             {
                 measuredError = Vector3.Distance(transform.position, newVal.Position);
-                transform.position = newVal.Position;
-                transform.rotation = Quaternion.Euler(newVal.Rotation);
+                ApplyNetworkStateDirectly(newVal);
             }
 
             currentSpeed = newVal.Speed;
@@ -594,7 +664,7 @@ public class CarController : NetworkBehaviour
             serverCollisionCounter = newVal.CollisionCount;
         }
 
-        if (IsOwner)
+        if (IsOwner && !usesOwnerAuthoritativeFallback)
         {
             StatePayload predictedState = clientStateBuffer.Get(newVal.Tick);
 
@@ -678,6 +748,14 @@ public class CarController : NetworkBehaviour
         }
     }
 
+    private void ApplyNetworkStateDirectly(PosAndRotNetworkData state)
+    {
+        transform.position = state.Position;
+        transform.rotation = Quaternion.Euler(state.Rotation);
+        currentSpeed = state.Speed;
+        collisionCounter = state.CollisionCount;
+    }
+
     public void TeleportToStart()
     {
         if (waypoints == null || waypoints.Count < 2) return;
@@ -706,9 +784,35 @@ public class CarController : NetworkBehaviour
 
     public (bool, int) ProcessFixedCarController()
     {
+        if (AutoShootBot)
+        {
+            if (IsServer)
+            {
+                SetAutoShootBotPose();
+                lastProcessedTick = RaceManager.Instance.networkTimer.CurrentTick;
+            }
+
+            return (false, lastProcessedTick);
+        }
+
         if (IsClient && IsOwner && !_rigidbody.isKinematic)
         {
             ProcessClientPrediction();
+
+            if (ShouldOwnerUseDeadReckoning && _networkData.Value.Position != Vector3.zero)
+            {
+                ProcessClientDeadReckoning();
+
+                var networkTimer = RaceManager.Instance.networkTimer;
+
+                clientStateBuffer.Add(new StatePayload()
+                {
+                    tick = networkTimer.CurrentTick,
+                    position = transform.position,
+                    rotation = transform.rotation,
+                    speed = currentSpeed
+                }, networkTimer.CurrentTick);
+            }
         }
 
         if (IsServer && !_rigidbody.isKinematic)
@@ -1181,6 +1285,7 @@ public class CarController : NetworkBehaviour
 
         if (IsOwner && AutoShootBot)
         {
+            SetAutoShootBotPose();
             TryAutoShootBot();
         }
 
@@ -1197,38 +1302,16 @@ public class CarController : NetworkBehaviour
         if (_rigidbody == null || _rigidbody.isKinematic) return;
         if (State == CarState.Idle || State == CarState.Dead) return;
 
-        if (!HasAutoShootTargetAhead()) return;
+        if (!TryGetShootTarget(out CarController autoTarget, false, autoShootMinForwardDistance)) return;
 
+        //LogShootDebug($"AutoShootBot fires tick={ShootDebugTick} shooter={ID} {BuildShootTargetInfo(autoTarget)}");
         nextAutoShootTime = Time.time + autoShootCooldown;
         OnAttack();
     }
 
     private bool HasAutoShootTargetAhead()
     {
-        Vector3 origin = transform.position + Vector3.up * 0.5f;
-        RaycastHit[] hits = Physics.SphereCastAll(
-            origin,
-            autoShootRadius,
-            transform.forward,
-            autoShootRange,
-            ~0,
-            QueryTriggerInteraction.Ignore
-        );
-
-        foreach (RaycastHit hit in hits)
-        {
-            CarController car = hit.collider.GetComponentInParent<CarController>();
-            if (car == null || car == this || car.ID == ID) continue;
-            if (!hit.collider.CompareTag("Player") && !car.CompareTag("Player")) continue;
-
-            Vector3 toCar = car.transform.position - transform.position;
-            float forwardDistance = Vector3.Dot(transform.forward, toCar);
-            if (forwardDistance < autoShootMinForwardDistance || forwardDistance > autoShootRange) continue;
-
-            return true;
-        }
-
-        return false;
+        return TryGetShootTarget(out _, false, autoShootMinForwardDistance);
     }
 
     private void CalculateJerk() {
@@ -1331,6 +1414,7 @@ public class CarController : NetworkBehaviour
         if (state.tick == 0) return;
         _rigidbody.position = state.position;
         _rigidbody.rotation = state.rotation;
+        transform.SetPositionAndRotation(state.position, state.rotation);
         currentSpeed = carMovement?.ClampSpeed(state.speed) ?? state.speed;
         collisionCounter = state.collisionCount;
     }
@@ -1383,32 +1467,47 @@ public class CarController : NetworkBehaviour
     {
         OnCarClientShoot();
 
-        var hits = Physics.SphereCastAll(transform.position, 3, transform.forward);
-        foreach (var hit in hits)
+        int tick = RaceManager.Instance.networkTimer.CurrentTick;
+        //LogShootDebug($"OnAttack local tick={tick} shooter={ID} isOwner={IsOwner} isServer={IsServer} autoBot={AutoShootBot}");
+
+        bool hasClientTarget = TryGetShootTarget(out CarController car, true, shootMinForwardDistance, true);
+        ShootContext shootContext = CreateShootContext(car);
+
+        if (hasClientTarget)
         {
-            var car = hit.collider.gameObject.GetComponent<CarController>();
-            if (hit.collider.gameObject.CompareTag("Player") && car.State is CarState.Vulnerable)
+            var player = RaceManager.Instance.players.FirstOrDefault(p => p != null && p.ID == car.ID);
+            if (player != null && car.ID != ID)
             {
-                var player = RaceManager.Instance.players[car.ID];
-                if (player != null && car.ID != ID)
-                {
-                    kills++;
-                    UIManager.Instance.UpdateClientCollisionCounts(kills);
-                    break;
-                }
+                kills++;
+                UIManager.Instance.UpdateClientCollisionCounts(kills);
             }
         }
 
-        OnAttackRpc(RaceManager.Instance.networkTimer.CurrentTick);
+        OnAttackRpc(tick, shootContext);
     }
 
     [Rpc(SendTo.Server)]
-    private void OnAttackRpc(int tick)
+    private void OnAttackRpc(int tick, ShootContext shootContext)
     {
         //ulong rocketID = GameManager.Instance.SpawnRocket(spawnPos, spawnRot, OwnerClientId);
 
+        int serverTick = RaceManager.Instance?.networkTimer?.CurrentTick ?? -1;
+        //LogShootDebug($"OnAttackRpc server received shooter={ID} shotTick={tick} serverTick={serverTick} age={serverTick - tick} lagComp={RaceManager.Instance != null && RaceManager.Instance.UseLagCompensation} autoBot={AutoShootBot}");
+
+        if (RaceManager.Instance != null && RaceManager.Instance.UseLagCompensation)
+        {
+            SendShootSignalToClientsRpc();
+            if (AutoShootBot)
+            {
+                tick = RegisterAutoShootBotState(tick);
+                //LogShootDebug($"AutoShootBot registered state shooter={ID} registeredTick={tick} serverTick={serverTick} pos={transform.position}");
+            }
+
+            RaceManager.Instance.UpdateAttackInput(ID, tick, shootContext);
+            return;
+        }
+
         OnCarServerShoot();
-        RaceManager.Instance.UpdateAttackInput(ID, tick);
     }
 
     
@@ -1419,35 +1518,477 @@ public class CarController : NetworkBehaviour
         Debug.Log($"Car {ID} shoots");
     }
 
+    private int RegisterAutoShootBotState(int tick)
+    {
+        int tickToUse = tick > 0 ? tick : RaceManager.Instance.networkTimer.CurrentTick;
+        SetAutoShootBotPose();
+        lastProcessedTick = tickToUse;
+        RaceManager.Instance.PendState(ID, GetStateOfCar(tickToUse));
+        return tickToUse;
+    }
+
+    private ShootContext CreateShootContext(CarController target)
+    {
+        return new ShootContext
+        {
+            hasTarget = target != null,
+            targetId = target != null ? target.ID : -1,
+            shooterPosition = transform.position,
+            shooterForward = transform.forward,
+            targetPosition = target != null ? target.transform.position : Vector3.zero
+        };
+    }
+
+    public CarController GetServerShootTarget()
+    {
+        if (!IsServer) return null;
+        return TryGetShootTarget(out CarController target, true, shootMinForwardDistance, true) ? target : null;
+    }
+
+    public CarController GetServerShootTarget(ShootContext shootContext)
+    {
+        if (!IsServer) return null;
+        if (TryGetShootTargetFromContext(shootContext, out CarController contextTarget))
+        {
+            return contextTarget;
+        }
+
+        return GetServerShootTarget();
+    }
+
+    public void ApplyServerShootHit(CarController target)
+    {
+        if (!IsServer || target == null || target == this || target.ID == ID) return;
+        if (target.State is not CarState.Vulnerable) return;
+
+        var player = RaceManager.Instance.players.FirstOrDefault(p => p != null && p.ID == target.ID);
+        if (player == null) return;
+
+        //LogShootDebug($"Server applies hit shooter={ID} target={target.ID} tick={ShootDebugTick} {BuildShootTargetInfo(target)}");
+        target.OnRocketHit();
+        NetworkPlayer.Kills++;
+        if (IsOwner) UIManager.Instance.UpdateServerCollisionCounts(NetworkPlayer.Kills);
+        SendUpdateKillsRpc(ID, NetworkPlayer.Kills);
+    }
+
     public void OnCarServerShoot()
     {
-        var hits = Physics.SphereCastAll(transform.position, 3, transform.forward);
-        foreach (var hit in hits)
+        if (GetServerShootTarget() is CarController target)
         {
-            var car = hit.collider.gameObject.GetComponent<CarController>();
-            if (hit.collider.gameObject.CompareTag("Player") && car.State is CarState.Vulnerable)
-            {
-                if (IsServer) 
-                {
-                    var player = RaceManager.Instance.players[car.ID];
-                    if (player != null && car.ID != ID)
-                    {
-                        car.OnRocketHit();
-                        RaceManager.Instance.players[car.ID].Kills++;
-                        UIManager.Instance.UpdateServerCollisionCounts(RaceManager.Instance.players[car.ID].Kills);
-                        break;
-                    }
-                }
-            }
+            ApplyServerShootHit(target);
         }
 
         SendShootSignalToClientsRpc();
+    }
+
+    private bool TryGetShootTargetFromContext(ShootContext shootContext, out CarController target)
+    {
+        target = null;
+        if (!shootContext.hasTarget) return false;
+
+        target = FindCarById(shootContext.targetId);
+        if (target == null) return false;
+        if (!IsValidShootCar(target, true)) return false;
+        if (!target.CompareTag("Player")) return false;
+
+        Vector3 forward = shootContext.shooterForward.sqrMagnitude > 0.0001f
+            ? shootContext.shooterForward.normalized
+            : transform.forward.normalized;
+        Vector3 origin = shootContext.shooterPosition + Vector3.up * 0.5f;
+        Vector3 targetPosition = shootContext.targetPosition != Vector3.zero
+            ? shootContext.targetPosition
+            : target.transform.position;
+
+        Vector3 toTarget = targetPosition - origin;
+        float forwardDistance = Vector3.Dot(forward, toTarget);
+        float lateralDistance = Vector3.Cross(forward, toTarget).magnitude;
+        float allowedLateral = Mathf.Max(autoShootRadius, 0.1f) + GetApproximateShootTargetRadius(target);
+        float range = Mathf.Max(autoShootRange, autoShootRadius);
+
+        bool accepted =
+            forwardDistance >= shootMinForwardDistance &&
+            forwardDistance <= range &&
+            lateralDistance <= allowedLateral;
+
+        if (accepted)
+        {
+            LogShootDebug(
+                $"ClientContext HIT shooter={ID} target={target.ID} tick={ShootDebugTick} " +
+                $"fwd={forwardDistance:F2} lateral={lateralDistance:F2} allowedLateral={allowedLateral:F2} " +
+                $"clientTargetPos={targetPosition} serverTargetPos={target.transform.position}"
+            );
+        }
+
+        return accepted;
+    }
+
+    private CarController FindCarById(int id)
+    {
+        if (RaceManager.Instance == null || RaceManager.Instance.players == null) return null;
+
+        foreach (NetworkPlayer player in RaceManager.Instance.players)
+        {
+            if (player == null || player.ID != id) continue;
+            return player.GetCarController;
+        }
+
+        return null;
+    }
+
+    private bool TryGetShootTarget(
+        out CarController target,
+        bool requireVulnerableTarget = true,
+        float minForwardDistance = shootMinForwardDistance,
+        bool logResult = false)
+    {
+        target = null;
+
+        Vector3 origin = transform.position + Vector3.up * 0.5f;
+        Vector3 forward = transform.forward.normalized;
+        float radius = Mathf.Max(autoShootRadius, 0.1f);
+        float range = Mathf.Max(autoShootRange, radius);
+        float bestForwardDistance = float.MaxValue;
+
+        // SphereCastAll does not report colliders that already overlap the cast volume.
+        Collider[] overlappingColliders = Physics.OverlapSphere(
+            origin,
+            radius,
+            ~0,
+            QueryTriggerInteraction.Ignore
+        );
+
+        foreach (Collider collider in overlappingColliders)
+        {
+            TrySelectShootTarget(
+                collider,
+                origin,
+                forward,
+                range,
+                minForwardDistance,
+                requireVulnerableTarget,
+                ref target,
+                ref bestForwardDistance
+            );
+        }
+
+        RaycastHit[] hits = Physics.SphereCastAll(
+            origin,
+            radius,
+            forward,
+            range,
+            ~0,
+            QueryTriggerInteraction.Ignore
+        );
+        Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+
+        foreach (RaycastHit hit in hits)
+        {
+            TrySelectShootTarget(
+                hit.collider,
+                origin,
+                forward,
+                range,
+                minForwardDistance,
+                requireVulnerableTarget,
+                ref target,
+                ref bestForwardDistance
+            );
+        }
+
+        if (target == null && IsServer && RaceManager.Instance != null && RaceManager.Instance.IsRewinding)
+        {
+            TrySelectTransformShootTarget(
+                origin,
+                forward,
+                radius,
+                range,
+                minForwardDistance,
+                requireVulnerableTarget,
+                ref target,
+                ref bestForwardDistance
+            );
+        }
+
+        if (logResult)
+        {
+            string result = target != null ? "HIT" : "MISS";
+            //LogShootDebug($"TargetScan {result} tick={ShootDebugTick} shooter={ID} requireVulnerable={requireVulnerableTarget} overlapHits={overlappingColliders.Length} castHits={hits.Length} minFwd={minForwardDistance:F2} range={range:F2} {BuildShootTargetInfo(target)}");
+            if (target == null)
+            {
+                LogShootMissDetails(
+                    origin,
+                    forward,
+                    range,
+                    minForwardDistance,
+                    requireVulnerableTarget,
+                    overlappingColliders,
+                    hits
+                );
+            }
+        }
+
+        return target != null;
+    }
+
+    private void LogShootDebug(string message)
+    {
+        if (!ENABLE_DEBUG_LOG) return;
+        Debug.Log($"<color=cyan>[ShootDebug]</color> {message}");
+    }
+
+    private string BuildShootTargetInfo(CarController target)
+    {
+        if (target == null)
+        {
+            return $"target=none shooterPos={transform.position} shooterForward={transform.forward}";
+        }
+
+        Vector3 origin = transform.position + Vector3.up * 0.5f;
+        Vector3 forward = transform.forward.normalized;
+        Vector3 toTarget = target.transform.position - origin;
+        float forwardDistance = Vector3.Dot(forward, toTarget);
+        float lateralDistance = Vector3.Cross(forward, toTarget).magnitude;
+        float distance = Vector3.Distance(transform.position, target.transform.position);
+
+        return $"target={target.ID} targetState={target.State} dist={distance:F2} fwd={forwardDistance:F2} lateral={lateralDistance:F2} shooterPos={transform.position} targetPos={target.transform.position}";
+    }
+
+    private void LogShootMissDetails(
+        Vector3 origin,
+        Vector3 forward,
+        float range,
+        float minForwardDistance,
+        bool requireVulnerableTarget,
+        Collider[] overlappingColliders,
+        RaycastHit[] castHits)
+    {
+        HashSet<CarController> scannedCars = new();
+
+        foreach (Collider collider in overlappingColliders)
+        {
+            LogShootColliderCandidate(
+                "overlap",
+                collider,
+                origin,
+                forward,
+                range,
+                minForwardDistance,
+                requireVulnerableTarget,
+                scannedCars
+            );
+        }
+
+        foreach (RaycastHit hit in castHits)
+        {
+            LogShootColliderCandidate(
+                $"cast@{hit.distance:F2}",
+                hit.collider,
+                origin,
+                forward,
+                range,
+                minForwardDistance,
+                requireVulnerableTarget,
+                scannedCars
+            );
+        }
+
+        if (RaceManager.Instance == null || RaceManager.Instance.players == null) return;
+
+        foreach (NetworkPlayer player in RaceManager.Instance.players)
+        {
+            CarController car = player != null ? player.GetCarController : null;
+            if (car == null || car == this) continue;
+
+            Vector3 toCar = car.transform.position - origin;
+            float forwardDistance = Vector3.Dot(forward, toCar);
+            float lateralDistance = Vector3.Cross(forward, toCar).magnitude;
+            float distance = Vector3.Distance(transform.position, car.transform.position);
+
+            // LogShootDebug(
+            //     $"WorldCandidate shooter={ID} target={car.ID} state={car.State} " +
+            //     $"dist={distance:F2} fwd={forwardDistance:F2} lateral={lateralDistance:F2} " +
+            //     $"inForwardRange={forwardDistance >= minForwardDistance && forwardDistance <= range} " +
+            //     $"targetPos={car.transform.position}"
+            // );
+        }
+    }
+
+    private void LogShootColliderCandidate(
+        string source,
+        Collider collider,
+        Vector3 origin,
+        Vector3 forward,
+        float range,
+        float minForwardDistance,
+        bool requireVulnerableTarget,
+        HashSet<CarController> scannedCars)
+    {
+        CarController car = collider.GetComponentInParent<CarController>();
+        if (car == null)
+        {
+            //LogShootDebug($"ScanCandidate source={source} collider={collider.name} car=none layer={LayerMask.LayerToName(collider.gameObject.layer)} tag={collider.tag}");
+            return;
+        }
+
+        if (!scannedCars.Add(car)) return;
+
+        Vector3 toCar = car.transform.position - origin;
+        float forwardDistance = Vector3.Dot(forward, toCar);
+        float lateralDistance = Vector3.Cross(forward, toCar).magnitude;
+        float distance = Vector3.Distance(transform.position, car.transform.position);
+        string rejectReason = GetShootRejectReason(
+            collider,
+            car,
+            forwardDistance,
+            range,
+            minForwardDistance,
+            requireVulnerableTarget
+        );
+
+        // LogShootDebug(
+        //     $"ScanCandidate source={source} shooter={ID} car={car.ID} state={car.State} " +
+        //     $"reason={rejectReason} dist={distance:F2} fwd={forwardDistance:F2} lateral={lateralDistance:F2} " +
+        //     $"collider={collider.name} colliderTag={collider.tag} carTag={car.tag} targetPos={car.transform.position}"
+        // );
+    }
+
+    private string GetShootRejectReason(
+        Collider collider,
+        CarController car,
+        float forwardDistance,
+        float range,
+        float minForwardDistance,
+        bool requireVulnerableTarget)
+    {
+        if (car == null) return "NoCarController";
+        if (car == this) return "Self";
+        if (car.ID == ID) return "SameId";
+        if (requireVulnerableTarget && car.State is not CarState.Vulnerable) return "NotVulnerable";
+        if (!collider.CompareTag("Player") && !car.CompareTag("Player")) return "NotPlayerTag";
+        if (forwardDistance < minForwardDistance) return "TooCloseOrBehind";
+        if (forwardDistance > range) return "OutOfRange";
+
+        return "WouldAccept";
+    }
+
+    private void TrySelectTransformShootTarget(
+        Vector3 origin,
+        Vector3 forward,
+        float castRadius,
+        float range,
+        float minForwardDistance,
+        bool requireVulnerableTarget,
+        ref CarController bestTarget,
+        ref float bestForwardDistance)
+    {
+        if (RaceManager.Instance == null || RaceManager.Instance.players == null) return;
+
+        foreach (NetworkPlayer player in RaceManager.Instance.players)
+        {
+            CarController car = player != null ? player.GetCarController : null;
+            if (!IsValidShootCar(car, requireVulnerableTarget)) continue;
+            if (!car.CompareTag("Player")) continue;
+
+            Vector3 toCar = car.transform.position - origin;
+            float forwardDistance = Vector3.Dot(forward, toCar);
+            if (forwardDistance < minForwardDistance || forwardDistance > range) continue;
+            if (forwardDistance >= bestForwardDistance) continue;
+
+            float lateralDistance = Vector3.Cross(forward, toCar).magnitude;
+            float targetRadius = GetApproximateShootTargetRadius(car);
+            if (lateralDistance > castRadius + targetRadius) continue;
+
+            bestTarget = car;
+            bestForwardDistance = forwardDistance;
+            // LogShootDebug(
+            //     $"TransformFallback HIT shooter={ID} target={car.ID} tick={ShootDebugTick} " +
+            //     $"fwd={forwardDistance:F2} lateral={lateralDistance:F2} allowedLateral={(castRadius + targetRadius):F2} " +
+            //     $"targetPos={car.transform.position}"
+            // );
+        }
+    }
+
+    private float GetApproximateShootTargetRadius(CarController car)
+    {
+        const float fallbackRadius = 2.5f;
+        float radius = fallbackRadius;
+        Collider[] colliders = car.GetComponentsInChildren<Collider>();
+
+        foreach (Collider collider in colliders)
+        {
+            if (collider == null || collider.isTrigger) continue;
+
+            Vector3 extents = collider.bounds.extents;
+            float horizontalRadius = new Vector2(extents.x, extents.z).magnitude;
+            radius = Mathf.Max(radius, horizontalRadius);
+        }
+
+        return radius;
+    }
+
+    private void TrySelectShootTarget(
+        Collider collider,
+        Vector3 origin,
+        Vector3 forward,
+        float range,
+        float minForwardDistance,
+        bool requireVulnerableTarget,
+        ref CarController bestTarget,
+        ref float bestForwardDistance)
+    {
+        if (!TryGetValidShootCandidate(collider, requireVulnerableTarget, out CarController car))
+        {
+            return;
+        }
+
+        Vector3 toCar = car.transform.position - origin;
+        float forwardDistance = Vector3.Dot(forward, toCar);
+        if (forwardDistance < minForwardDistance || forwardDistance > range)
+        {
+            return;
+        }
+
+        if (forwardDistance >= bestForwardDistance)
+        {
+            return;
+        }
+
+        bestTarget = car;
+        bestForwardDistance = forwardDistance;
+    }
+
+    private bool TryGetValidShootCandidate(
+        Collider collider,
+        bool requireVulnerableTarget,
+        out CarController car)
+    {
+        car = collider.GetComponentInParent<CarController>();
+        if (!IsValidShootCar(car, requireVulnerableTarget)) return false;
+        if (!collider.CompareTag("Player") && !car.CompareTag("Player")) return false;
+
+        return true;
+    }
+
+    private bool IsValidShootCar(CarController car, bool requireVulnerableTarget)
+    {
+        if (car == null || car == this || car.ID == ID) return false;
+        if (requireVulnerableTarget && car.State is not CarState.Vulnerable) return false;
+
+        return true;
     }
 
     [Rpc(SendTo.NotOwner)]
     void SendShootSignalToClientsRpc()
     {
         OnCarClientShoot();
+    }
+
+    [Rpc(SendTo.NotServer)]
+    void SendUpdateKillsRpc(int id, int newKills)
+    {
+        if (ID != id) return;
+        Debug.Log($"Recieved updated kills count: {newKills}");
+        UIManager.Instance.UpdateServerCollisionCounts(newKills);
     }
 
     #endregion

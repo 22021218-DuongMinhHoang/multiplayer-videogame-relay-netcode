@@ -370,6 +370,18 @@ public class UIManager : MonoBehaviour
             {
                 var toggle = carDeadReckoningToggles[i];
                 int id = i;
+
+                if (id >= 0 && id < RaceManager.Instance.players.Count)
+                {
+                    var player = RaceManager.Instance.players[id];
+                    CarController carController = player != null ? player.GetCarController : null;
+
+                    if (carController != null)
+                    {
+                        toggle.isOn = carController.UseDeadReckoning;
+                    }
+                }
+
                 toggle.onValueChanged.AddListener((enable) => OnCarDeadReckoningToggleChanged(id, enable));
             }
         }
@@ -540,7 +552,6 @@ public class UIManager : MonoBehaviour
         var player = RaceManager.Instance.players[id];
         if (player == null) return;
         CarController carController = player.GetCarController;
-        if (carController.IsOwnerCar) return;
         if (carController != null)
         {
             carController.UseDeadReckoning = enable;
@@ -598,16 +609,18 @@ public class UIManager : MonoBehaviour
 
     private void OnLagCompensationChanged(bool enable)
     {
-        var players = RaceManager.Instance.players;
-        foreach (var player in players)
-        {
-            if (player == null) continue;
-            CarController carController = player.GetCarController;
-            if (carController != null && carController.IsOwnerCar)
-            {
-                carController.UseLagCompensation = enable;
-            }
-        }
+        //var players = RaceManager.Instance.players;
+        // foreach (var player in players)
+        // {
+        //     if (player == null) continue;
+        //     CarController carController = player.GetCarController;
+        //     if (carController != null && carController.IsOwnerCar)
+        //     {
+        //         carController.UseLagCompensation = enable;
+        //     }
+        // }
+        Debug.Log("Lag Compensation toggled: " + enable);
+        RaceManager.Instance.UseLagCompensation = enable;
     }
 
     public void UpdatePlayerList()
@@ -784,7 +797,7 @@ public class UIManager : MonoBehaviour
             {
                 if (player == null) continue;
                 CarController carController = player.GetCarController;
-                if (carController != null && carController.IsOwnerCar)
+                if (carController != null)
                 {
                     carController.SetAdaptiveThresholdConfig(baseThreshold, kvCoeff, kaCoeff);
                 }

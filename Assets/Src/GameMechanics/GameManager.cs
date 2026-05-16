@@ -299,6 +299,7 @@ public class GameManager : MonoBehaviour
     
     [Header("Bot Settings")]
     [SerializeField] public Transform waypointContainer; 
+    [SerializeField] public Transform botShootPoint;
     public List<Transform> GetLevelWaypoints()
     {
         List<Transform> points = new List<Transform>();

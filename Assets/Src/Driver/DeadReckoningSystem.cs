@@ -36,16 +36,16 @@ public class DeadReckoningSystem
     public bool UseTimeSync { get; set; } = true;
     
     // Adaptive Error Threshold Configuration
-    private float baseErrorThreshold = 2.5f;
-    private float velocityCoefficientKv = 0.15f;
-    private float accelerationCoefficientKa = 0.25f; 
+    private float baseErrorThreshold = 4f;
+    private float velocityCoefficientKv = 0.25f;
+    private float accelerationCoefficientKa = 0.4f; 
     private float currentNetworkLatency = 0.05f;
     
     // Metrics
     // private List<float> packetIntervals = new List<float>();
     // private float lastPacketLocalTime = 0f;
 
-    float adaptedThreshold = 2.5f;
+    float adaptedThreshold = 4f;
     
     public DeadReckoningMode CurrentDRMode => currentDRMode;
     public CorrectionMode CurrentCorrectionMode => currentCorrectionMode;
