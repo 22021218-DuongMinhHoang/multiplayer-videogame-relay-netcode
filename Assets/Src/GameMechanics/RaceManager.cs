@@ -383,7 +383,7 @@ public class RaceManager : MonoBehaviour
     int bufferSize = 8192;
     float TICK_RATE = 50f;
     float rewindCooldownTime = 0f;
-    [SerializeField] private float maxLagCompensationSeconds = 4f;
+    private float maxLagCompensationSeconds = 2f;
     [SerializeField] private int rewindTickSearchRadius = 8;
     private CircularBuffer<StatePayload[]> stateBuffer;
     public CircularBuffer<InputPayload[]> inputBuffer;

@@ -9,7 +9,7 @@ public class InputManager
     private int currentTick = 0;
     private InputPayload lastKnownInput;
     private SortedDictionary<int, InputPayload> pendingInputs;
-    private const int MAX_PENDING_INPUTS = 5000;
+    //private const int MAX_PENDING_INPUTS = 5000;
     private const int BUFFER_SIZE = 8192;
     
     public int CurrentTick => currentTick;
@@ -86,7 +86,7 @@ public class InputManager
         if (!pendingInputs.ContainsKey(input.tick))
         {
             pendingInputs.Add(input.tick, input);
-            if (pendingInputs.Count > MAX_PENDING_INPUTS)
+            if (pendingInputs.Count > BUFFER_SIZE)
                 pendingInputs.Remove(pendingInputs.Keys.First());
         }
         else

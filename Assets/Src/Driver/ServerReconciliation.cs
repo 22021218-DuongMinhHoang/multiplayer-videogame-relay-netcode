@@ -25,6 +25,22 @@ public class ServerReconciliation
     public StatePayload LastProcessedState => lastProcessedState;
     public double AverageExportError => aeeCount > 0 ? aeeSum / aeeCount : 0.0;
     public float HitPercentage => aeeCount > 0 ? (hitCount * 100f / aeeCount) : 0f;
+    #region Rewind Limit
+    private float tickRate = -1;
+    private float maxReconciliationSeconds = 2f;
+    private float TICK_RATE
+    {
+        get
+        {
+            if (tickRate < 0)
+            {
+                tickRate = 1 / RaceManager.Instance.networkTimer.MinTimeBetweenTicks;
+            }
+            return tickRate;
+        }
+    }
+    public int MaxRewindTickAge => Mathf.CeilToInt(TICK_RATE * maxReconciliationSeconds);
+    #endregion
     
     public void RecordServerState(int tick, Vector3 pos, Quaternion rot, float speed)
     {
@@ -44,19 +60,19 @@ public class ServerReconciliation
         return (posError, rotError);
     }
     
-    public bool ShouldReconcile(float posError, float rotError, float currentSpeed, float serverSpeed)
+    public bool ShouldReconcile(float posError, float rotError)
     {
         // bool isNearlyStopped = Mathf.Abs(currentSpeed) < LOW_SPEED_THRESHOLD && 
         //                       Mathf.Abs(serverSpeed) < LOW_SPEED_THRESHOLD;
         
-        bool errorsLarge = posError <= RECONCILE_POS_THRESHOLD && rotError <= RECONCILE_ROT_THRESHOLD;
+        bool errorsLarge = posError <= RECONCILE_POS_THRESHOLD; //&& rotError <= RECONCILE_ROT_THRESHOLD;
         //Debug.Log($"Position Error: {posError} Should Reconcile: {errorsLarge && !isRewinding}");
         return errorsLarge && !isRewinding;
     }
     
     public bool ShouldHardSnap(float posError, float rotError)
     {
-        return posError > RECONCILE_POS_THRESHOLD || rotError > RECONCILE_ROT_THRESHOLD;
+        return posError > RECONCILE_POS_THRESHOLD; //|| rotError > RECONCILE_ROT_THRESHOLD;
     }
     
     public void StartRewinding()

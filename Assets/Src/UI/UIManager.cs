@@ -326,7 +326,7 @@ public class UIManager : MonoBehaviour
                 CarController carController = player.GetCarController;
                 if (carController != null && carController.IsOwnerCar)
                 {
-                    clientSidePredictionToggle.isOn = carController.UseClientSidePrediction;
+                    
                     break;
                 }
             }
@@ -342,7 +342,7 @@ public class UIManager : MonoBehaviour
                 CarController carController = player.GetCarController;
                 if (carController != null && carController.IsOwnerCar)
                 {
-                    serverReconciliationToggle.isOn = carController.UseServerReconciliation;
+                    
                     break;
                 }
             }
@@ -358,7 +358,7 @@ public class UIManager : MonoBehaviour
                 CarController carController = player.GetCarController;
                 if (carController != null && carController.IsOwnerCar)
                 {
-                    lagCompensationToggle.isOn = carController.UseLagCompensation;
+                    
                     break;
                 }
             }
@@ -402,9 +402,9 @@ public class UIManager : MonoBehaviour
                 CarController carController = player.GetCarController;
                 if (carController == null) continue;
 
-                Debug.Log($"??? {(int)carController.deadReckoningSystem.CurrentDRMode}");
+                //Debug.Log($"??? {(int)carController.deadReckoningSystem.CurrentDRMode}");
 
-                dropdown.SetValueWithoutNotify((int)carController.deadReckoningSystem.CurrentDRMode);
+                dropdown.value = (int)carController.deadReckoningSystem.CurrentDRMode;
             }
         }
 
@@ -425,7 +425,7 @@ public class UIManager : MonoBehaviour
                 if (carController == null) continue;
 
                 //dropdown.value = (int)carController.deadReckoningSystem.CurrentCorrectionMode;
-                dropdown.SetValueWithoutNotify((int)carController.deadReckoningSystem.CurrentCorrectionMode);
+                dropdown.value = (int)carController.deadReckoningSystem.CurrentCorrectionMode;
             }
         }
 
@@ -983,6 +983,24 @@ public class UIManager : MonoBehaviour
     public void UpdateServerCollisionCounts(int serverCount)
     {
         if (serverCollisionCountText != null) serverCollisionCountText.text = $"{serverCount}";
+    }
+
+    public void SetInitOption(CarController car)
+    {
+        if (car != null)
+        {
+            if (car.IsOwner)
+            {
+                clientSidePredictionToggle.isOn = car.UseClientSidePrediction;
+                serverReconciliationToggle.isOn = car.UseServerReconciliation;
+                lagCompensationToggle.isOn = car.UseLagCompensation;
+            }
+            carDeadReckoningToggles[car.ID].isOn = car.UseDeadReckoning;
+            carDRModeDropdowns[car.ID].value = (int)car.deadReckoningSystem.CurrentDRMode;
+            carCorrectionModeDropdowns[car.ID].value = (int)car.deadReckoningSystem.CurrentCorrectionMode;
+            carAdaptiveThresholdToggles[car.ID].isOn = car.deadReckoningSystem.UseAdaptiveThreshold;
+            carTimeSyncToggles[car.ID].isOn = car.deadReckoningSystem.UseTimeSync;
+        }
     }
 
     #endregion

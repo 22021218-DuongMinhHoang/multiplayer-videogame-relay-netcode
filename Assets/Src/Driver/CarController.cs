@@ -493,6 +493,8 @@ public class CarController : NetworkBehaviour
         //if (deadReckoningSystem != null) deadReckoningSystem.ResetSplineState(transform.position);
 
         if (IsOwner && NetworkPlayer != null) NetworkPlayer.StartPos = NetworkPlayer.ID;
+
+        UIManager.Instance?.SetInitOption(this);
     }
 
     private void OnBotToggleChanged(bool isOn)
@@ -961,7 +963,7 @@ public class CarController : NetworkBehaviour
         if (latestServerState.tick <= serverReconciliation.LastProcessedState.tick)
             return;
 
-        if (networkTimer.CurrentTick - latestServerState.tick > BUFFER_SIZE / 2)
+        if (networkTimer.CurrentTick - latestServerState.tick > serverReconciliation.MaxRewindTickAge)
             return;
 
         StatePayload predictedState = clientStateBuffer.Get(latestServerState.tick);
@@ -991,9 +993,7 @@ public class CarController : NetworkBehaviour
         serverReconciliation.RecordError(positionError);
 
         bool needCorrection =
-            positionError > 0.05f ||
-            rotationError > 1.0f ||
-            Mathf.Abs(predictedState.speed - latestServerState.speed) > 0.1f;
+            serverReconciliation.ShouldReconcile(positionError, rotationError);
 
         if (!needCorrection)
         {
