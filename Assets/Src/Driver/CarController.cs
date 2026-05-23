@@ -314,8 +314,6 @@ public class CarController : NetworkBehaviour
     public int CurrentKills => kills;
     public int GetLastProcessedTick() => lastProcessedTick;
 
-    private int ShootDebugTick => RaceManager.Instance?.networkTimer?.CurrentTick ?? -1;
-
     #endregion
 
     #region Delegates and Events
@@ -1315,16 +1313,10 @@ public class CarController : NetworkBehaviour
         if (_rigidbody == null || _rigidbody.isKinematic) return;
         if (State == CarState.Idle || State == CarState.Dead) return;
 
-        if (!TryGetShootTarget(out CarController autoTarget, false, autoShootMinForwardDistance)) return;
+        if (TryGetShootTarget() == null) return;
 
-        //LogShootDebug($"AutoShootBot fires tick={ShootDebugTick} shooter={ID} {BuildShootTargetInfo(autoTarget)}");
         nextAutoShootTime = Time.time + autoShootCooldown;
         OnAttack();
-    }
-
-    private bool HasAutoShootTargetAhead()
-    {
-        return TryGetShootTarget(out _, false, autoShootMinForwardDistance);
     }
 
     private void CalculateJerk() {
@@ -1474,56 +1466,42 @@ public class CarController : NetworkBehaviour
 
     }
 
+    #region Shooting
+
     int kills;
+
+    // private struct ShootScan
+    // {
+    //     public Vector3 Origin;
+    //     public Vector3 Forward;
+    //     public float Radius;
+    //     public float Range;
+    //     public float MinForwardDistance;
+    // }
 
     public void OnAttack()
     {
         OnCarClientShoot();
 
         int tick = RaceManager.Instance.networkTimer.CurrentTick;
-        //LogShootDebug($"OnAttack local tick={tick} shooter={ID} isOwner={IsOwner} isServer={IsServer} autoBot={AutoShootBot}");
-
-        bool hasClientTarget = TryGetShootTarget(out CarController car, true, shootMinForwardDistance, true);
-        ShootContext shootContext = CreateShootContext(car);
-
-        if (hasClientTarget)
-        {
-            var player = RaceManager.Instance.players.FirstOrDefault(p => p != null && p.ID == car.ID);
-            if (player != null && car.ID != ID)
-            {
-                kills++;
-                UIManager.Instance.UpdateClientCollisionCounts(kills);
-            }
-        }
-
-        OnAttackRpc(tick, shootContext);
+        CarController target = TryGetShootTarget();
+        RegisterClientShootHit(target);
+        OnAttackRpc(tick, CreateShootContext(target));
     }
 
     [Rpc(SendTo.Server)]
     private void OnAttackRpc(int tick, ShootContext shootContext)
     {
-        //ulong rocketID = GameManager.Instance.SpawnRocket(spawnPos, spawnRot, OwnerClientId);
-
-        int serverTick = RaceManager.Instance?.networkTimer?.CurrentTick ?? -1;
-        //LogShootDebug($"OnAttackRpc server received shooter={ID} shotTick={tick} serverTick={serverTick} age={serverTick - tick} lagComp={RaceManager.Instance != null && RaceManager.Instance.UseLagCompensation} autoBot={AutoShootBot}");
-
-        if (RaceManager.Instance != null && RaceManager.Instance.UseLagCompensation)
+        RaceManager raceManager = RaceManager.Instance;
+        if (raceManager == null || !raceManager.UseLagCompensation)
         {
-            SendShootSignalToClientsRpc();
-            if (AutoShootBot)
-            {
-                tick = RegisterAutoShootBotState(tick);
-                //LogShootDebug($"AutoShootBot registered state shooter={ID} registeredTick={tick} serverTick={serverTick} pos={transform.position}");
-            }
-
-            RaceManager.Instance.UpdateAttackInput(ID, tick, shootContext);
+            OnCarServerShoot();
             return;
         }
 
-        OnCarServerShoot();
+        SendShootSignalToClientsRpc();
+        raceManager.UpdateAttackInput(ID, AutoShootBot ? RegisterAutoShootBotState(tick) : tick, shootContext);
     }
-
-    
 
     public void OnCarClientShoot()
     {
@@ -1542,42 +1520,35 @@ public class CarController : NetworkBehaviour
 
     private ShootContext CreateShootContext(CarController target)
     {
+        bool hasTarget = target != null;
         return new ShootContext
         {
-            hasTarget = target != null,
-            targetId = target != null ? target.ID : -1,
+            hasTarget = hasTarget,
+            targetId = hasTarget ? target.ID : -1,
             shooterPosition = transform.position,
             shooterForward = transform.forward,
-            targetPosition = target != null ? target.transform.position : Vector3.zero
+            targetPosition = hasTarget ? target.transform.position : Vector3.zero
         };
     }
 
     public CarController GetServerShootTarget()
     {
-        if (!IsServer) return null;
-        return TryGetShootTarget(out CarController target, true, shootMinForwardDistance, true) ? target : null;
+        CarController target = TryGetShootTarget();
+        return IsServer && target != null ? target : null;
     }
 
     public CarController GetServerShootTarget(ShootContext shootContext)
     {
         if (!IsServer) return null;
-        if (TryGetShootTargetFromContext(shootContext, out CarController contextTarget))
-        {
-            return contextTarget;
-        }
-
-        return GetServerShootTarget();
+        return TryGetShootTargetFromContext(shootContext, out CarController contextTarget)
+            ? contextTarget
+            : GetServerShootTarget();
     }
 
     public void ApplyServerShootHit(CarController target)
     {
-        if (!IsServer || target == null || target == this || target.ID == ID) return;
-        if (target.State is not CarState.Vulnerable) return;
+        if (!IsServer || !IsValidShootCar(target) || FindRacePlayer(target.ID) == null) return;
 
-        var player = RaceManager.Instance.players.FirstOrDefault(p => p != null && p.ID == target.ID);
-        if (player == null) return;
-
-        //LogShootDebug($"Server applies hit shooter={ID} target={target.ID} tick={ShootDebugTick} {BuildShootTargetInfo(target)}");
         target.OnRocketHit();
         NetworkPlayer.Kills++;
         if (IsOwner) UIManager.Instance.UpdateServerCollisionCounts(NetworkPlayer.Kills);
@@ -1586,408 +1557,203 @@ public class CarController : NetworkBehaviour
 
     public void OnCarServerShoot()
     {
-        if (GetServerShootTarget() is CarController target)
-        {
-            ApplyServerShootHit(target);
-        }
-
+        ApplyServerShootHit(GetServerShootTarget());
         SendShootSignalToClientsRpc();
+    }
+
+    private void RegisterClientShootHit(CarController target)
+    {
+        if (target == null || target.ID == ID || FindRacePlayer(target.ID) == null) return;
+
+        kills++;
+        UIManager.Instance.UpdateClientCollisionCounts(kills);
     }
 
     private bool TryGetShootTargetFromContext(ShootContext shootContext, out CarController target)
     {
-        target = null;
-        if (!shootContext.hasTarget) return false;
-
-        target = FindCarById(shootContext.targetId);
-        if (target == null) return false;
-        if (!IsValidShootCar(target, true)) return false;
-        if (!target.CompareTag("Player")) return false;
+        target = shootContext.hasTarget ? FindCarById(shootContext.targetId) : null;
+        if (!IsValidShootCar(target) || !target.CompareTag("Player")) return false;
 
         Vector3 forward = shootContext.shooterForward.sqrMagnitude > 0.0001f
             ? shootContext.shooterForward.normalized
             : transform.forward.normalized;
-        Vector3 origin = shootContext.shooterPosition + Vector3.up * 0.5f;
         Vector3 targetPosition = shootContext.targetPosition != Vector3.zero
             ? shootContext.targetPosition
             : target.transform.position;
 
-        Vector3 toTarget = targetPosition - origin;
-        float forwardDistance = Vector3.Dot(forward, toTarget);
-        float lateralDistance = Vector3.Cross(forward, toTarget).magnitude;
-        float allowedLateral = Mathf.Max(autoShootRadius, 0.1f) + GetApproximateShootTargetRadius(target);
-        float range = Mathf.Max(autoShootRange, autoShootRadius);
-
-        bool accepted =
-            forwardDistance >= shootMinForwardDistance &&
-            forwardDistance <= range &&
-            lateralDistance <= allowedLateral;
-
-        if (accepted)
-        {
-            LogShootDebug(
-                $"ClientContext HIT shooter={ID} target={target.ID} tick={ShootDebugTick} " +
-                $"fwd={forwardDistance:F2} lateral={lateralDistance:F2} allowedLateral={allowedLateral:F2} " +
-                $"clientTargetPos={targetPosition} serverTargetPos={target.transform.position}"
-            );
-        }
-
-        return accepted;
+        GetShootDistances(shootContext.shooterPosition + Vector3.up * 0.5f, forward, targetPosition, out float forwardDistance, out float lateralDistance);
+        return IsInForwardShootRange(forwardDistance, shootMinForwardDistance, Mathf.Max(autoShootRange, autoShootRadius)) &&
+               lateralDistance <= Mathf.Max(autoShootRadius, 0.1f) + GetApproximateShootTargetRadius(target);
     }
 
-    private CarController FindCarById(int id)
+    private NetworkPlayer FindRacePlayer(int id) =>
+        RaceManager.Instance?.players?.FirstOrDefault(p => p != null && p.ID == id);
+
+    private CarController FindCarById(int id) => FindRacePlayer(id)?.GetCarController;
+
+    private CarController TryGetShootTarget()
     {
-        if (RaceManager.Instance == null || RaceManager.Instance.players == null) return null;
+        CarController target = null;
 
-        foreach (NetworkPlayer player in RaceManager.Instance.players)
-        {
-            if (player == null || player.ID != id) continue;
-            return player.GetCarController;
-        }
+        //ShootScan scan = CreateShootScan(minForwardDistance);
+        //float bestForwardDistance = float.MaxValue;
 
-        return null;
-    }
+        // // check xe doi thu ngay gan
+        // Collider[] overlappingColliders = Physics.OverlapSphere(
+        //     scan.Origin,
+        //     scan.Radius,
+        //     -1,
+        //     QueryTriggerInteraction.Ignore
+        // );
 
-    private bool TryGetShootTarget(
-        out CarController target,
-        bool requireVulnerableTarget = true,
-        float minForwardDistance = shootMinForwardDistance,
-        bool logResult = false)
-    {
-        target = null;
+        // foreach (Collider collider in overlappingColliders)
+        // {
+        //     TrySelectShootTarget(
+        //         collider,
+        //         scan,
+        //         requireVulnerableTarget,
+        //         ref target,
+        //         ref bestForwardDistance
+        //     );
+        // }
 
-        Vector3 origin = transform.position + Vector3.up * 0.5f;
-        Vector3 forward = transform.forward.normalized;
-        float radius = Mathf.Max(autoShootRadius, 0.1f);
-        float range = Mathf.Max(autoShootRange, radius);
-        float bestForwardDistance = float.MaxValue;
-
-        // SphereCastAll does not report colliders that already overlap the cast volume.
-        Collider[] overlappingColliders = Physics.OverlapSphere(
-            origin,
-            radius,
-            ~0,
-            QueryTriggerInteraction.Ignore
-        );
-
-        foreach (Collider collider in overlappingColliders)
-        {
-            TrySelectShootTarget(
-                collider,
-                origin,
-                forward,
-                range,
-                minForwardDistance,
-                requireVulnerableTarget,
-                ref target,
-                ref bestForwardDistance
-            );
-        }
-
+        // check xe doi thu o xa hon
         RaycastHit[] hits = Physics.SphereCastAll(
-            origin,
-            radius,
-            forward,
-            range,
-            ~0,
+            transform.position + Vector3.up * 0.5f,
+            Mathf.Max(autoShootRadius, 0.1f),
+            transform.forward.normalized,
+            Mathf.Max(autoShootRange, Mathf.Max(autoShootRadius, 0.1f)),
+            -1,
             QueryTriggerInteraction.Ignore
         );
-        Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
+        //Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
 
         foreach (RaycastHit hit in hits)
         {
-            TrySelectShootTarget(
-                hit.collider,
-                origin,
-                forward,
-                range,
-                minForwardDistance,
-                requireVulnerableTarget,
-                ref target,
-                ref bestForwardDistance
-            );
-        }
-
-        if (target == null && IsServer && RaceManager.Instance != null && RaceManager.Instance.IsRewinding)
-        {
-            TrySelectTransformShootTarget(
-                origin,
-                forward,
-                radius,
-                range,
-                minForwardDistance,
-                requireVulnerableTarget,
-                ref target,
-                ref bestForwardDistance
-            );
-        }
-
-        if (logResult)
-        {
-            string result = target != null ? "HIT" : "MISS";
-            //LogShootDebug($"TargetScan {result} tick={ShootDebugTick} shooter={ID} requireVulnerable={requireVulnerableTarget} overlapHits={overlappingColliders.Length} castHits={hits.Length} minFwd={minForwardDistance:F2} range={range:F2} {BuildShootTargetInfo(target)}");
-            if (target == null)
+            if (TryGetValidShootCandidate(hit.collider, out CarController car))
             {
-                LogShootMissDetails(
-                    origin,
-                    forward,
-                    range,
-                    minForwardDistance,
-                    requireVulnerableTarget,
-                    overlappingColliders,
-                    hits
-                );
+                target = car;
+                break;
             }
         }
 
-        return target != null;
+        // if (target == null && IsServer && RaceManager.Instance?.IsRewinding == true)
+        // {
+        //     TrySelectTransformShootTarget(
+        //         scan,
+        //         requireVulnerableTarget,
+        //         ref target,
+        //         ref bestForwardDistance
+        //     );
+        // }
+
+        return target;
     }
 
-    private void LogShootDebug(string message)
-    {
-        if (!ENABLE_DEBUG_LOG) return;
-        Debug.Log($"<color=cyan>[ShootDebug]</color> {message}");
-    }
+    // private ShootScan CreateShootScan(float minForwardDistance)
+    // {
+    //     float radius = Mathf.Max(autoShootRadius, 0.1f);
+    //     return new ShootScan
+    //     {
+    //         Origin = transform.position + Vector3.up * 0.5f,
+    //         Forward = transform.forward.normalized,
+    //         Radius = radius,
+    //         Range = Mathf.Max(autoShootRange, radius),
+    //         MinForwardDistance = minForwardDistance
+    //     };
+    // }
 
-    private string BuildShootTargetInfo(CarController target)
-    {
-        if (target == null)
-        {
-            return $"target=none shooterPos={transform.position} shooterForward={transform.forward}";
-        }
+    // private void TrySelectTransformShootTarget(
+    //     ShootScan scan,
+    //     bool requireVulnerableTarget,
+    //     ref CarController bestTarget,
+    //     ref float bestForwardDistance)
+    // {
+    //     if (RaceManager.Instance == null || RaceManager.Instance.players == null) return;
 
-        Vector3 origin = transform.position + Vector3.up * 0.5f;
-        Vector3 forward = transform.forward.normalized;
-        Vector3 toTarget = target.transform.position - origin;
-        float forwardDistance = Vector3.Dot(forward, toTarget);
-        float lateralDistance = Vector3.Cross(forward, toTarget).magnitude;
-        float distance = Vector3.Distance(transform.position, target.transform.position);
+    //     foreach (NetworkPlayer player in RaceManager.Instance.players)
+    //     {
+    //         CarController car = player != null ? player.GetCarController : null;
+    //         if (!IsValidShootCar(car, requireVulnerableTarget) || !car.CompareTag("Player")) continue;
+    //         if (!TryGetCloserShootCandidate(car, scan, bestForwardDistance, out float forwardDistance, out float lateralDistance)) continue;
+    //         if (lateralDistance > scan.Radius + GetApproximateShootTargetRadius(car)) continue;
 
-        return $"target={target.ID} targetState={target.State} dist={distance:F2} fwd={forwardDistance:F2} lateral={lateralDistance:F2} shooterPos={transform.position} targetPos={target.transform.position}";
-    }
-
-    private void LogShootMissDetails(
-        Vector3 origin,
-        Vector3 forward,
-        float range,
-        float minForwardDistance,
-        bool requireVulnerableTarget,
-        Collider[] overlappingColliders,
-        RaycastHit[] castHits)
-    {
-        HashSet<CarController> scannedCars = new();
-
-        foreach (Collider collider in overlappingColliders)
-        {
-            LogShootColliderCandidate(
-                "overlap",
-                collider,
-                origin,
-                forward,
-                range,
-                minForwardDistance,
-                requireVulnerableTarget,
-                scannedCars
-            );
-        }
-
-        foreach (RaycastHit hit in castHits)
-        {
-            LogShootColliderCandidate(
-                $"cast@{hit.distance:F2}",
-                hit.collider,
-                origin,
-                forward,
-                range,
-                minForwardDistance,
-                requireVulnerableTarget,
-                scannedCars
-            );
-        }
-
-        if (RaceManager.Instance == null || RaceManager.Instance.players == null) return;
-
-        foreach (NetworkPlayer player in RaceManager.Instance.players)
-        {
-            CarController car = player != null ? player.GetCarController : null;
-            if (car == null || car == this) continue;
-
-            Vector3 toCar = car.transform.position - origin;
-            float forwardDistance = Vector3.Dot(forward, toCar);
-            float lateralDistance = Vector3.Cross(forward, toCar).magnitude;
-            float distance = Vector3.Distance(transform.position, car.transform.position);
-
-            // LogShootDebug(
-            //     $"WorldCandidate shooter={ID} target={car.ID} state={car.State} " +
-            //     $"dist={distance:F2} fwd={forwardDistance:F2} lateral={lateralDistance:F2} " +
-            //     $"inForwardRange={forwardDistance >= minForwardDistance && forwardDistance <= range} " +
-            //     $"targetPos={car.transform.position}"
-            // );
-        }
-    }
-
-    private void LogShootColliderCandidate(
-        string source,
-        Collider collider,
-        Vector3 origin,
-        Vector3 forward,
-        float range,
-        float minForwardDistance,
-        bool requireVulnerableTarget,
-        HashSet<CarController> scannedCars)
-    {
-        CarController car = collider.GetComponentInParent<CarController>();
-        if (car == null)
-        {
-            //LogShootDebug($"ScanCandidate source={source} collider={collider.name} car=none layer={LayerMask.LayerToName(collider.gameObject.layer)} tag={collider.tag}");
-            return;
-        }
-
-        if (!scannedCars.Add(car)) return;
-
-        Vector3 toCar = car.transform.position - origin;
-        float forwardDistance = Vector3.Dot(forward, toCar);
-        float lateralDistance = Vector3.Cross(forward, toCar).magnitude;
-        float distance = Vector3.Distance(transform.position, car.transform.position);
-        string rejectReason = GetShootRejectReason(
-            collider,
-            car,
-            forwardDistance,
-            range,
-            minForwardDistance,
-            requireVulnerableTarget
-        );
-
-        // LogShootDebug(
-        //     $"ScanCandidate source={source} shooter={ID} car={car.ID} state={car.State} " +
-        //     $"reason={rejectReason} dist={distance:F2} fwd={forwardDistance:F2} lateral={lateralDistance:F2} " +
-        //     $"collider={collider.name} colliderTag={collider.tag} carTag={car.tag} targetPos={car.transform.position}"
-        // );
-    }
-
-    private string GetShootRejectReason(
-        Collider collider,
-        CarController car,
-        float forwardDistance,
-        float range,
-        float minForwardDistance,
-        bool requireVulnerableTarget)
-    {
-        if (car == null) return "NoCarController";
-        if (car == this) return "Self";
-        if (car.ID == ID) return "SameId";
-        if (requireVulnerableTarget && car.State is not CarState.Vulnerable) return "NotVulnerable";
-        if (!collider.CompareTag("Player") && !car.CompareTag("Player")) return "NotPlayerTag";
-        if (forwardDistance < minForwardDistance) return "TooCloseOrBehind";
-        if (forwardDistance > range) return "OutOfRange";
-
-        return "WouldAccept";
-    }
-
-    private void TrySelectTransformShootTarget(
-        Vector3 origin,
-        Vector3 forward,
-        float castRadius,
-        float range,
-        float minForwardDistance,
-        bool requireVulnerableTarget,
-        ref CarController bestTarget,
-        ref float bestForwardDistance)
-    {
-        if (RaceManager.Instance == null || RaceManager.Instance.players == null) return;
-
-        foreach (NetworkPlayer player in RaceManager.Instance.players)
-        {
-            CarController car = player != null ? player.GetCarController : null;
-            if (!IsValidShootCar(car, requireVulnerableTarget)) continue;
-            if (!car.CompareTag("Player")) continue;
-
-            Vector3 toCar = car.transform.position - origin;
-            float forwardDistance = Vector3.Dot(forward, toCar);
-            if (forwardDistance < minForwardDistance || forwardDistance > range) continue;
-            if (forwardDistance >= bestForwardDistance) continue;
-
-            float lateralDistance = Vector3.Cross(forward, toCar).magnitude;
-            float targetRadius = GetApproximateShootTargetRadius(car);
-            if (lateralDistance > castRadius + targetRadius) continue;
-
-            bestTarget = car;
-            bestForwardDistance = forwardDistance;
-            // LogShootDebug(
-            //     $"TransformFallback HIT shooter={ID} target={car.ID} tick={ShootDebugTick} " +
-            //     $"fwd={forwardDistance:F2} lateral={lateralDistance:F2} allowedLateral={(castRadius + targetRadius):F2} " +
-            //     $"targetPos={car.transform.position}"
-            // );
-        }
-    }
+    //         bestTarget = car;
+    //         bestForwardDistance = forwardDistance;
+    //     }
+    // }
 
     private float GetApproximateShootTargetRadius(CarController car)
     {
         const float fallbackRadius = 2.5f;
         float radius = fallbackRadius;
-        Collider[] colliders = car.GetComponentsInChildren<Collider>();
 
-        foreach (Collider collider in colliders)
+        foreach (Collider collider in car.GetComponentsInChildren<Collider>())
         {
             if (collider == null || collider.isTrigger) continue;
 
             Vector3 extents = collider.bounds.extents;
-            float horizontalRadius = new Vector2(extents.x, extents.z).magnitude;
-            radius = Mathf.Max(radius, horizontalRadius);
+            radius = Mathf.Max(radius, new Vector2(extents.x, extents.z).magnitude);
         }
 
         return radius;
     }
 
-    private void TrySelectShootTarget(
-        Collider collider,
+    // private void TrySelectShootTarget(
+    //     Collider collider,
+    //     ref CarController bestTarget)
+    // {
+    //     if (!TryGetValidShootCandidate(collider, out CarController car)) return;
+    //     //if (!TryGetCloserShootCandidate(car, scan, bestForwardDistance, out float forwardDistance, out _)) return;
+
+    //     bestTarget = car;
+    //     //bestForwardDistance = forwardDistance;
+    // }
+
+    // private bool TryGetCloserShootCandidate(
+    //     CarController car,
+    //     ShootScan scan,
+    //     float bestForwardDistance,
+    //     out float forwardDistance,
+    //     out float lateralDistance)
+    // {
+    //     GetShootDistances(scan.Origin, scan.Forward, car.transform.position, out forwardDistance, out lateralDistance);
+    //     return IsInForwardShootRange(forwardDistance, scan.MinForwardDistance, scan.Range)
+    //            && forwardDistance < bestForwardDistance;
+    // }
+
+    private static void GetShootDistances(
         Vector3 origin,
         Vector3 forward,
-        float range,
-        float minForwardDistance,
-        bool requireVulnerableTarget,
-        ref CarController bestTarget,
-        ref float bestForwardDistance)
+        Vector3 targetPosition,
+        out float forwardDistance,
+        out float lateralDistance)
     {
-        if (!TryGetValidShootCandidate(collider, requireVulnerableTarget, out CarController car))
-        {
-            return;
-        }
+        Vector3 toTarget = targetPosition - origin;
+        forwardDistance = Vector3.Dot(forward, toTarget);
+        lateralDistance = Vector3.Cross(forward, toTarget).magnitude;
+    }
 
-        Vector3 toCar = car.transform.position - origin;
-        float forwardDistance = Vector3.Dot(forward, toCar);
-        if (forwardDistance < minForwardDistance || forwardDistance > range)
-        {
-            return;
-        }
-
-        if (forwardDistance >= bestForwardDistance)
-        {
-            return;
-        }
-
-        bestTarget = car;
-        bestForwardDistance = forwardDistance;
+    private static bool IsInForwardShootRange(float forwardDistance, float minForwardDistance, float range)
+    {
+        return forwardDistance >= minForwardDistance && forwardDistance <= range;
     }
 
     private bool TryGetValidShootCandidate(
         Collider collider,
-        bool requireVulnerableTarget,
         out CarController car)
     {
         car = collider.GetComponentInParent<CarController>();
-        if (!IsValidShootCar(car, requireVulnerableTarget)) return false;
-        if (!collider.CompareTag("Player") && !car.CompareTag("Player")) return false;
-
-        return true;
+        return IsValidShootCar(car) &&
+               (collider.CompareTag("Player") || car.CompareTag("Player"));
     }
 
-    private bool IsValidShootCar(CarController car, bool requireVulnerableTarget)
+    private bool IsValidShootCar(CarController car)
     {
-        if (car == null || car == this || car.ID == ID) return false;
-        if (requireVulnerableTarget && car.State is not CarState.Vulnerable) return false;
-
-        return true;
+        return car != null &&
+               car != this &&
+               car.ID != ID &&
+               car.State is CarState.Vulnerable;
     }
 
     [Rpc(SendTo.NotOwner)]
@@ -2003,6 +1769,8 @@ public class CarController : NetworkBehaviour
         Debug.Log($"Recieved updated kills count: {newKills}");
         UIManager.Instance.UpdateServerCollisionCounts(newKills);
     }
+
+    #endregion
 
     #endregion
 }
