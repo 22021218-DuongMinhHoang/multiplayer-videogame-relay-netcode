@@ -1004,6 +1004,19 @@ public class CarController : NetworkBehaviour
                 latestServerState.speed
             );
 
+            _rigidbody.position = latestServerState.position;
+            _rigidbody.rotation = latestServerState.rotation;
+            currentSpeed = latestServerState.speed;
+
+            StatePayload state = clientStateBuffer.Get(latestServerState.tick);
+
+            if (state.tick != 0)
+            {
+                state.position = latestServerState.position;
+                state.rotation = latestServerState.rotation;
+                state.speed = latestServerState.speed;
+            }
+
             return;
         }
 
