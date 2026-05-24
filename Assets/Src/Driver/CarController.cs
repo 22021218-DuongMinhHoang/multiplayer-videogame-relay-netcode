@@ -917,35 +917,6 @@ public class CarController : NetworkBehaviour
         HandleServerReconciliation();
     }
 
-    // private void HandleClientTick()
-    // {
-    //     if (!IsClient || !IsOwner || _rigidbody.isKinematic) return;
-        
-    //     int currentTick = networkTimer.CurrentTick;
-        
-    //     InputPayload inputPayload = new InputPayload()
-    //     {
-    //         tick = currentTick,
-    //         inputAcceleration = inputAcceleration,
-    //         inputSteering = inputSteering,
-    //         inputBrake = inputBrake,
-    //         isCollide = CheckCollision()
-    //     };
-        
-    //     clientInputBuffer.Add(inputPayload, currentTick);
-    //     SubmitInputServerRpc(inputPayload);
-        
-    //     StatePayload predicted = carMovement.SimulateMovement(_rigidbody.position, _rigidbody.rotation, currentSpeed, inputPayload, networkTimer.MinTimeBetweenTicks, NetworkPlayer?.RubberBandCoefficient ?? 1f);
-    //     predicted.tick = currentTick;
-    //     clientStateBuffer.Add(predicted, currentTick);
-        
-    //     _rigidbody.MovePosition(predicted.position);
-    //     _rigidbody.MoveRotation(predicted.rotation);
-    //     currentSpeed = carMovement.ClampSpeed(predicted.speed);
-        
-    //     HandleServerReconciliation();
-    // }
-
     private void HandleServerReconciliation()
     {
         if (!UseServerReconciliation)
@@ -1165,26 +1136,19 @@ public class CarController : NetworkBehaviour
     private bool CheckCollision()
     {
         if (!UseLagCompensation || IsServer) return false;
-        //Vector3 rayOrigin = _rigidbody.position + transform.forward * 1.5f + Vector3.up * 0.5f;
-        //RaycastHit[] hits = Physics.RaycastAll(rayOrigin, transform.forward, 2.0f);
 
         Collider[] hits = Physics.OverlapSphere(_rigidbody.position, 2.5f);
+        int unhittableLayer = LayerMask.NameToLayer("Unhittable");
 
         foreach (var hit in hits)
         {
-            if (!hit.isTrigger && hit.gameObject != gameObject && hit.gameObject.layer != LayerMask.NameToLayer("Unhittable"))
+            if (!hit.isTrigger && hit.gameObject != gameObject && hit.gameObject.layer != unhittableLayer)
             {
                 return true;
             }
         }
         return false;
     }
-
-    // void OnDrawGizmos()
-    // {
-    //     Gizmos.color = Color.red;
-    //     Gizmos.DrawSphere(transform.position, 2.5f);
-    // }
 
     public void ApplyInputForPhysics(InputPayload input)
     {
@@ -1195,32 +1159,6 @@ public class CarController : NetworkBehaviour
         _rigidbody.MoveRotation(state.rotation);
         currentSpeed = state.speed;
     }
-
-    // public void ServerSendState()
-    // {
-    //     if (!_rigidbody.isKinematic)
-    //     {
-    //         Vector3 currentVel = _rigidbody.velocity;
-    //         Vector3 accel = Time.fixedDeltaTime > 0 ? (currentVel - _serverVel) / Time.fixedDeltaTime : Vector3.zero;
-
-    //         _networkData.Value = new PosAndRotNetworkData() {
-    //             Position = transform.position,
-    //             Rotation = transform.rotation.eulerAngles,
-    //             Velocity = currentVel,
-    //             Acceleration = accel,
-    //             Timestamp = Time.time,
-    //             Tick = lastProcessedTick, 
-    //             Speed = currentSpeed,
-    //             CollisionCount = collisionCounter
-    //         };
-
-    //         _serverVel = currentVel;
-    //     }
-    //     else
-    //     {
-    //         _networkData.Value = new PosAndRotNetworkData() { Position = Vector3.zero, Rotation = Vector3.zero };
-    //     }
-    // }
 
     public void ServerSendState(StatePayload state, bool rewinded = false)
     {
@@ -1444,19 +1382,6 @@ public class CarController : NetworkBehaviour
             inputManager.RemoveOldPendingInputs(tick);
     }
 
-    void OnCollisionEnter(Collision collision)
-    {
-        // if (IsOwner || (IsServer && RaceManager.Instance.IsRewinding))
-        // {
-        //     collisionCounter++;
-        // }
-
-        // if (IsOwner)
-        // {
-        //     UIManager.Instance.UpdateClientCollisionCounts(collisionCounter);
-        // }
-    }
-
     void ResetAll()
     {
         clientStateBuffer?.Clear();
@@ -1469,15 +1394,6 @@ public class CarController : NetworkBehaviour
     #region Shooting
 
     int kills;
-
-    // private struct ShootScan
-    // {
-    //     public Vector3 Origin;
-    //     public Vector3 Forward;
-    //     public float Radius;
-    //     public float Range;
-    //     public float MinForwardDistance;
-    // }
 
     public void OnAttack()
     {
@@ -1533,8 +1449,7 @@ public class CarController : NetworkBehaviour
 
     public CarController GetServerShootTarget()
     {
-        CarController target = TryGetShootTarget();
-        return IsServer && target != null ? target : null;
+        return IsServer ? TryGetShootTarget() : null;
     }
 
     public CarController GetServerShootTarget(ShootContext shootContext)
@@ -1542,7 +1457,7 @@ public class CarController : NetworkBehaviour
         if (!IsServer) return null;
         return TryGetShootTargetFromContext(shootContext, out CarController contextTarget)
             ? contextTarget
-            : GetServerShootTarget();
+            : TryGetShootTarget();
     }
 
     public void ApplyServerShootHit(CarController target)
@@ -1593,31 +1508,6 @@ public class CarController : NetworkBehaviour
 
     private CarController TryGetShootTarget()
     {
-        CarController target = null;
-
-        //ShootScan scan = CreateShootScan(minForwardDistance);
-        //float bestForwardDistance = float.MaxValue;
-
-        // // check xe doi thu ngay gan
-        // Collider[] overlappingColliders = Physics.OverlapSphere(
-        //     scan.Origin,
-        //     scan.Radius,
-        //     -1,
-        //     QueryTriggerInteraction.Ignore
-        // );
-
-        // foreach (Collider collider in overlappingColliders)
-        // {
-        //     TrySelectShootTarget(
-        //         collider,
-        //         scan,
-        //         requireVulnerableTarget,
-        //         ref target,
-        //         ref bestForwardDistance
-        //     );
-        // }
-
-        // check xe doi thu o xa hon
         RaycastHit[] hits = Physics.SphereCastAll(
             transform.position + Vector3.up * 0.5f,
             Mathf.Max(autoShootRadius, 0.1f),
@@ -1626,62 +1516,17 @@ public class CarController : NetworkBehaviour
             -1,
             QueryTriggerInteraction.Ignore
         );
-        //Array.Sort(hits, (a, b) => a.distance.CompareTo(b.distance));
 
         foreach (RaycastHit hit in hits)
         {
             if (TryGetValidShootCandidate(hit.collider, out CarController car))
             {
-                target = car;
-                break;
+                return car;
             }
         }
 
-        // if (target == null && IsServer && RaceManager.Instance?.IsRewinding == true)
-        // {
-        //     TrySelectTransformShootTarget(
-        //         scan,
-        //         requireVulnerableTarget,
-        //         ref target,
-        //         ref bestForwardDistance
-        //     );
-        // }
-
-        return target;
+        return null;
     }
-
-    // private ShootScan CreateShootScan(float minForwardDistance)
-    // {
-    //     float radius = Mathf.Max(autoShootRadius, 0.1f);
-    //     return new ShootScan
-    //     {
-    //         Origin = transform.position + Vector3.up * 0.5f,
-    //         Forward = transform.forward.normalized,
-    //         Radius = radius,
-    //         Range = Mathf.Max(autoShootRange, radius),
-    //         MinForwardDistance = minForwardDistance
-    //     };
-    // }
-
-    // private void TrySelectTransformShootTarget(
-    //     ShootScan scan,
-    //     bool requireVulnerableTarget,
-    //     ref CarController bestTarget,
-    //     ref float bestForwardDistance)
-    // {
-    //     if (RaceManager.Instance == null || RaceManager.Instance.players == null) return;
-
-    //     foreach (NetworkPlayer player in RaceManager.Instance.players)
-    //     {
-    //         CarController car = player != null ? player.GetCarController : null;
-    //         if (!IsValidShootCar(car, requireVulnerableTarget) || !car.CompareTag("Player")) continue;
-    //         if (!TryGetCloserShootCandidate(car, scan, bestForwardDistance, out float forwardDistance, out float lateralDistance)) continue;
-    //         if (lateralDistance > scan.Radius + GetApproximateShootTargetRadius(car)) continue;
-
-    //         bestTarget = car;
-    //         bestForwardDistance = forwardDistance;
-    //     }
-    // }
 
     private float GetApproximateShootTargetRadius(CarController car)
     {
@@ -1698,29 +1543,6 @@ public class CarController : NetworkBehaviour
 
         return radius;
     }
-
-    // private void TrySelectShootTarget(
-    //     Collider collider,
-    //     ref CarController bestTarget)
-    // {
-    //     if (!TryGetValidShootCandidate(collider, out CarController car)) return;
-    //     //if (!TryGetCloserShootCandidate(car, scan, bestForwardDistance, out float forwardDistance, out _)) return;
-
-    //     bestTarget = car;
-    //     //bestForwardDistance = forwardDistance;
-    // }
-
-    // private bool TryGetCloserShootCandidate(
-    //     CarController car,
-    //     ShootScan scan,
-    //     float bestForwardDistance,
-    //     out float forwardDistance,
-    //     out float lateralDistance)
-    // {
-    //     GetShootDistances(scan.Origin, scan.Forward, car.transform.position, out forwardDistance, out lateralDistance);
-    //     return IsInForwardShootRange(forwardDistance, scan.MinForwardDistance, scan.Range)
-    //            && forwardDistance < bestForwardDistance;
-    // }
 
     private static void GetShootDistances(
         Vector3 origin,
@@ -1765,9 +1587,11 @@ public class CarController : NetworkBehaviour
     [Rpc(SendTo.NotServer)]
     void SendUpdateKillsRpc(int id, int newKills)
     {
-        if (ID != id) return;
-        Debug.Log($"Recieved updated kills count: {newKills}");
-        UIManager.Instance.UpdateServerCollisionCounts(newKills);
+        if (ID == id && IsOwner)
+        {
+            Debug.Log($"Recieved updated kills count: {newKills}");
+            UIManager.Instance.UpdateServerCollisionCounts(newKills);
+        }
     }
 
     #endregion

@@ -6,7 +6,6 @@ using System.Text;
 using CustomTypes;
 using Unity.Netcode;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 
 [Serializable]
 public class RaceManager : MonoBehaviour
@@ -145,11 +144,10 @@ public class RaceManager : MonoBehaviour
 
         GameManager.Instance.OnGameStateChange += OnGameStateChange;
 
-        inputBuffer = new CircularBuffer<InputPayload[]>(bufferSize);
-        stateBuffer = new CircularBuffer<StatePayload[]>(bufferSize);
-        //rocketBuffer = new CircularBuffer<Dictionary<ulong, RocketStatePayload>>(bufferSize);
+        inputBuffer = new CircularBuffer<InputPayload[]>(BufferSize);
+        stateBuffer = new CircularBuffer<StatePayload[]>(BufferSize);
 
-        networkTimer = new NetworkTimer(TICK_RATE);
+        networkTimer = new NetworkTimer(TickRate);
     }
 
     private void Update()
@@ -380,33 +378,21 @@ public class RaceManager : MonoBehaviour
 
     [Header("Lag Compensation Settings")]
     [SerializeField] private bool ENABLE_DEBUG_LOG = true; 
-    int bufferSize = 8192;
-    float TICK_RATE = 50f;
-    float rewindCooldownTime = 0f;
-    private float maxLagCompensationSeconds = 2f;
+    private const int PlayerSlotCount = 4;
+    private const int BufferSize = 8192;
+    private const float TickRate = 50f;
+    private const float MaxLagCompensationSeconds = 2f;
+    [SerializeField] private float rewindCooldownTime = 0f;
     [SerializeField] private int rewindTickSearchRadius = 8;
     private CircularBuffer<StatePayload[]> stateBuffer;
     public CircularBuffer<InputPayload[]> inputBuffer;
     int serverTick = 1;
-    float rewindCooldownCounter = 0;
-    //Dictionary<int, int> rewindTickQueue = new();
+    float rewindCooldownCounter = 0f;
     List<int> rewindTickQueue = new();
-    private readonly HashSet<long> processedShootInputs = new();
-    private readonly Dictionary<long, ShootContext> shootContexts = new();
+    private readonly HashSet<(int Tick, int ShooterId)> processedShootInputs = new();
+    private readonly Dictionary<(int Tick, int ShooterId), ShootContext> shootContexts = new();
 
-    private int MaxRewindTickAge => Mathf.Min(bufferSize - 1, Mathf.CeilToInt(TICK_RATE * maxLagCompensationSeconds));
-
-    private readonly struct PendingShootHit
-    {
-        public readonly CarController Shooter;
-        public readonly CarController Target;
-
-        public PendingShootHit(CarController shooter, CarController target)
-        {
-            Shooter = shooter;
-            Target = target;
-        }
-    }
+    private int MaxRewindTickAge => Mathf.Min(BufferSize - 1, Mathf.CeilToInt(TickRate * MaxLagCompensationSeconds));
 
     public NetworkTimer networkTimer { get; private set; }
 
@@ -415,254 +401,139 @@ public class RaceManager : MonoBehaviour
 
     public void PendInput(int id, InputPayload input)
     {
-        if (id < 0 || id >= 4) return;
+        if (!IsValidPlayerId(id)) return;
         int tick = input.tick;
 
-        InputPayload[] inputTemp = inputBuffer.Get(tick);
-        
-        if (inputTemp == null)
-        {
-            inputTemp = new InputPayload[4];
-            inputBuffer.Add(inputTemp, tick);
-        }
-
+        InputPayload[] inputTemp = GetOrCreateInputs(tick);
         input.isShoot |= inputTemp[id].tick == tick && inputTemp[id].isShoot;
         inputTemp[id] = input;
 
-        CarController car = null;
-        foreach (var p in players) {
-            if (p.ID == id) {
-                car = p.GetCarController;
-                break;
-            }
-        }
-
-        if (car != null && input.isCollide)
-        {
-            int carTick = networkTimer.CurrentTick;
-            if (carTick - tick <= MaxRewindTickAge)
-            {
-                if (!rewindTickQueue.Contains(tick)) rewindTickQueue.Add(tick);
-            }
-            if (rewindTickQueue.Count > bufferSize)
-            {
-                rewindTickQueue.RemoveAt(0);
-            }
-        }
+        if (input.isCollide) QueueRewindTick(tick, networkTimer.CurrentTick);
     }
 
     public void UpdateAttackInput(int id, int tick, ShootContext shootContext = default)
     {
-        if (id < 0 || id >= 4) return;
+        if (!IsValidPlayerId(id)) return;
 
-        InputPayload[] inputTemp = inputBuffer.Get(tick);
-        
-        if (inputTemp == null)
+        InputPayload[] inputTemp = GetOrCreateInputs(tick);
+        InputPayload input = inputTemp[id];
+        input.tick = tick;
+        input.isShoot = true;
+        inputTemp[id] = input;
+
+        shootContexts[(id, tick)] = shootContext;
+
+        int carTick = networkTimer.CurrentTick;
+        bool queuedForRewind = QueueRewindTick(tick, carTick);
+        if (ENABLE_DEBUG_LOG)
         {
-            inputTemp = new InputPayload[4];
-            inputTemp[id] = new InputPayload { tick = tick, isShoot = true };
-            inputBuffer.Add(inputTemp, tick);
+            Debug.Log($"<color=cyan>[ShootDebug]</color> Queue shot shooter={id} shotTick={tick} serverTick={carTick} age={carTick - tick} maxAge={MaxRewindTickAge} queuedForRewind={queuedForRewind} queueCount={rewindTickQueue.Count} hasContext={shootContext.hasTarget}");
         }
-        else
-        {
-            InputPayload input = inputTemp[id];
-            input.tick = tick;
-            input.isShoot = true;
-            inputTemp[id] = input;
-        }
+    }
 
-        //inputTemp[id] = input;
-        shootContexts[GetShootKey(id, tick)] = shootContext;
+    private bool IsValidPlayerId(int id) => id >= 0 && id < PlayerSlotCount;
 
-        CarController car = null;
-        foreach (var p in players) {
-            if (p.ID == id) {
-                car = p.GetCarController;
-                break;
-            }
-        }
+    private InputPayload[] GetOrCreateInputs(int tick)
+    {
+        InputPayload[] inputs = inputBuffer.Get(tick);
+        if (inputs == null) inputBuffer.Add(inputs = new InputPayload[PlayerSlotCount], tick);
+        return inputs;
+    }
 
-        if (car != null)
-        {
-            int carTick = networkTimer.CurrentTick;
-            bool queuedForRewind = false;
-            if (carTick - tick <= MaxRewindTickAge)
-            {
-                if (!rewindTickQueue.Contains(tick))
-                {
-                    rewindTickQueue.Add(tick);
-                    queuedForRewind = true;
-                }
-            }
-            if (rewindTickQueue.Count > bufferSize)
-            {
-                rewindTickQueue.RemoveAt(0);
-            }
+    private StatePayload[] GetOrCreateStates(int tick)
+    {
+        StatePayload[] states = stateBuffer.Get(tick);
+        if (states == null) stateBuffer.Add(states = new StatePayload[PlayerSlotCount], tick);
+        return states;
+    }
 
-            if (ENABLE_DEBUG_LOG)
-            {
-                Debug.Log($"<color=cyan>[ShootDebug]</color> Queue shot shooter={id} shotTick={tick} serverTick={carTick} age={carTick - tick} maxAge={MaxRewindTickAge} queuedForRewind={queuedForRewind} queueCount={rewindTickQueue.Count} hasContext={shootContext.hasTarget}");
-            }
-        }
+    private bool QueueRewindTick(int tick, int currentTick)
+    {
+        bool queued = currentTick - tick <= MaxRewindTickAge && !rewindTickQueue.Contains(tick);
+        if (queued) rewindTickQueue.Add(tick);
+        if (rewindTickQueue.Count > BufferSize) rewindTickQueue.RemoveAt(0);
+        return queued;
     }
 
     public void PendState(int id, StatePayload state)
     {
-        if (id < 0 || id >= 4) return;
+        if (!IsValidPlayerId(id)) return;
         int tick = state.tick;
 
-        StatePayload[] stateTemp = stateBuffer.Get(tick);
-        
-        if (stateTemp == null)
-        {
-            stateTemp = new StatePayload[4];
-            stateBuffer.Add(stateTemp, tick);
-        }
-
-        stateTemp[id] = state;
-
-        // if (Mathf.Abs(serverTick - tick) <= 50)
-        // {
-        //     rewindTickQueue.Add(tick);
-
-        //     if (rewindTickQueue.Count > bufferSize)
-        //     {
-        //         rewindTickQueue.RemoveAt(0);
-        //     }
-        // }
+        GetOrCreateStates(tick)[id] = state;
     }
-
-    // public void SignUpRocket(ulong id, RocketController rocketController)
-    // {
-    //     if (!rocketDict.ContainsKey(id))
-    //     {
-    //         rocketDict.Add(id, rocketController);
-    //     }
-    // }
-    
-    // public void PendRocketState(ulong id, RocketStatePayload rocketState)
-    // {
-    //     int tick = rocketState.tick;
-
-    //     Dictionary<ulong, RocketStatePayload> rocketTemp = rocketBuffer.Get(tick);
-        
-    //     if (rocketTemp == null)
-    //     {
-    //         rocketTemp = new Dictionary<ulong, RocketStatePayload>();
-    //         rocketTemp.Add(id, rocketState);
-    //         rocketBuffer.Add(rocketTemp, tick);
-    //     }
-
-    //     rocketTemp[id] = rocketState;
-    // }
 
     void FixedUpdate()
     {
         if (!networkTimer.ShouldTick())
             return;
 
-        bool canRewind = false;
-
         List<CarController> cars = new();
 
         foreach (var player in players)
         {
             CarController car = player.GetCarController;
-            if (car != null)
-            {
-                (bool hasInput, int lastTick) = car.ProcessFixedCarController();
-                if (hasInput)
-                {
-                    canRewind = true;
-                }
-                cars.Add(car);
-            }
+            if (car == null) continue;
+
+            car.ProcessFixedCarController();
+            cars.Add(car);
         }
 
-        // foreach (var rocket in rocketDict.Values)
-        // {
-        //     rocket.ProcessFixedRocketController();
-        // }
 
         // Server side
-        if ((NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) && !canRewind) return;
+        if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsServer) return;
 
         serverTick = networkTimer.CurrentTick;
 
-        for (int i = 0; i < cars.Count; i++)
+        foreach (CarController car in cars)
         {
-            var car = cars[i];
-            if (car != null) 
-            {   
-                StatePayload statePayload = car.GetStateOfCar();
-                
-                car.ServerSendState(statePayload);
-
-                PendState(car.ID, statePayload);
-            }
+            StatePayload statePayload = car.GetStateOfCar();
+            car.ServerSendState(statePayload);
+            PendState(car.ID, statePayload);
         }
 
-        if (UseLagCompensation && rewindCooldownCounter >= rewindCooldownTime)
+        if (UseLagCompensation && rewindCooldownCounter >= rewindCooldownTime && TryDequeueRewindTick(out int rewindTick))
         {
-            int rewindTick = -1;
-            string triggerReason = "";
-            rewindCooldownCounter = 0;
-            for (int i = 0; i < rewindTickQueue.Count; i++)
-            {
-                int tick = rewindTickQueue[i];
-                int tickAge = serverTick - tick;
+            rewindCooldownCounter = 0f;
 
-                if (tickAge < 0)
-                {
-                    continue;
-                }
+            if (ENABLE_DEBUG_LOG) 
+                Debug.Log($"<color=yellow>[Lag Compensation]</color> Rewind tick {rewindTick} (current tick: {serverTick})");
 
-                if (tickAge > MaxRewindTickAge)
-                {
-                    rewindTickQueue.RemoveAt(i);
-                    i--;
-                    continue;
-                }
-
-                int resolvedTick = ResolveRewindTick(tick);
-                if (resolvedTick < 0)
-                {
-                    continue;
-                }
-
-                if (rewindTick == -1)
-                {
-                    if (resolvedTick != tick)
-                    {
-                        MoveShootInputsToTick(tick, resolvedTick);
-                    }
-
-                    rewindTick = resolvedTick;
-                    triggerReason = resolvedTick == tick ? "Collision" : $"Collision [NearestTick {tick}->{resolvedTick}]";
-                    rewindTickQueue.RemoveAt(i);
-                    break;
-                }
-            }
-
-            if (rewindTick >= 0)
-            {
-                // if (serverTick - rewindTick > 30)
-                // {
-                //     rewindTick = serverTick - 30;
-                //     triggerReason += " [Capped at 30 Ticks]";
-                // }
-
-                if (ENABLE_DEBUG_LOG) 
-                    Debug.Log($"<color=yellow>[Lag Compensation]</color> Kích hoạt Rewind! Lý do: {triggerReason}. Quay về Tick: {rewindTick} (Tick hiện tại: {serverTick})");
-
-                RewindServerSingleScene(rewindTick);
-            } 
+            RewindServerSingleScene(rewindTick);
         }
     }
 
+    private bool TryDequeueRewindTick(out int rewindTick)
+    {
+        rewindTick = -1;
+
+        for (int i = 0; i < rewindTickQueue.Count; i++)
+        {
+            int tick = rewindTickQueue[i];
+            int tickAge = serverTick - tick;
+            if (tickAge < 0) continue;
+            if (tickAge > MaxRewindTickAge)
+            {
+                rewindTickQueue.RemoveAt(i--);
+                continue;
+            }
+
+            int resolvedTick = ResolveRewindTick(tick);
+            if (resolvedTick < 0) continue;
+
+            if (resolvedTick != tick) MoveShootInputsToTick(tick, resolvedTick);
+            rewindTick = resolvedTick;
+            rewindTickQueue.RemoveAt(i);
+            return true;
+        }
+
+        return false;
+    }
+
+    // check tick co state khong, khong thi tim tick gan nhat
     private int ResolveRewindTick(int tick)
     {
-        if (CanRewindTick(tick)) return tick;
+        if (HasExactRewindScene(tick)) return tick;
 
         int maxOffset = Mathf.Max(0, rewindTickSearchRadius);
         for (int offset = 1; offset <= maxOffset; offset++)
@@ -683,17 +554,13 @@ public class RaceManager : MonoBehaviour
         return -1;
     }
 
+    // dua input shoot tu tick cu sang tick moi
     private void MoveShootInputsToTick(int sourceTick, int targetTick)
     {
         InputPayload[] sourceInputs = inputBuffer.Get(sourceTick);
         if (sourceInputs == null) return;
 
-        InputPayload[] targetInputs = inputBuffer.Get(targetTick);
-        if (targetInputs == null)
-        {
-            targetInputs = new InputPayload[4];
-            inputBuffer.Add(targetInputs, targetTick);
-        }
+        InputPayload[] targetInputs = GetOrCreateInputs(targetTick);
 
         for (int id = 0; id < sourceInputs.Length; id++)
         {
@@ -703,11 +570,11 @@ public class RaceManager : MonoBehaviour
             sourceInput.tick = targetTick;
             targetInputs[id] = sourceInput;
 
-            long sourceKey = GetShootKey(id, sourceTick);
+            var sourceKey = (id, sourceTick);
             if (shootContexts.TryGetValue(sourceKey, out ShootContext context))
             {
                 shootContexts.Remove(sourceKey);
-                shootContexts[GetShootKey(id, targetTick)] = context;
+                shootContexts[(id, targetTick)] = context;
             }
 
             if (ENABLE_DEBUG_LOG)
@@ -715,22 +582,6 @@ public class RaceManager : MonoBehaviour
                 Debug.Log($"<color=cyan>[ShootDebug]</color> Move shot input shooter={id} sourceTick={sourceTick} targetTick={targetTick}");
             }
         }
-    }
-
-    private bool CanRewindTick(int tick)
-    {
-        InputPayload[] inputsAtTick = inputBuffer.Get(tick);
-        if (inputsAtTick == null) return false;
-
-        for (int id = 0; id < inputsAtTick.Length; id++)
-        {
-            InputPayload input = inputsAtTick[id];
-            if (input.tick != tick || !input.isShoot) continue;
-
-            return HasExactRewindScene(tick);
-        }
-
-        return HasExactRewindScene(tick);
     }
 
     private bool HasExactRewindScene(int tick)
@@ -758,25 +609,23 @@ public class RaceManager : MonoBehaviour
 
     private void RewindServerSingleScene(int tick)
     {
-        InputPayload[] startInputs = inputBuffer.Get(tick);
         StatePayload[] firstState = stateBuffer.Get(tick);
 
-        if (isRewinding || startInputs == null || firstState == null)
+        if (isRewinding || inputBuffer.Get(tick) == null || firstState == null)
         {
             return;
         }
 
         isRewinding = true;
-        List<PendingShootHit> pendingShootHits = new();
+        List<(CarController Shooter, CarController Target)> pendingShootHits = new();
 
         Physics.simulationMode = SimulationMode.Script;
 
         try
         {
-            CarController[] cars = new CarController[4];
+            CarController[] cars = new CarController[PlayerSlotCount];
             for (int i = 0; i < players.Count; i++)
             {
-                if (players[i] == null) continue;
                 CarController carReal = players[i].GetCarController;
                 int id = players[i].ID;
 
@@ -793,65 +642,46 @@ public class RaceManager : MonoBehaviour
             int lastTick = serverTick;
             int simulatedFrames = 0;
 
-            InputPayload[] lastInputs = new InputPayload[4];
+            InputPayload[] lastInputs = new InputPayload[PlayerSlotCount];
             for (int id = 0; id < cars.Length; id++)
             {
-                int searchTick = tick;
-                while (searchTick >= 0)
-                {
-                    InputPayload[] inputTemp = inputBuffer.Get(searchTick);
-                    if (inputTemp != null && inputTemp[id].tick == searchTick)
-                    {
-                        lastInputs[id] = inputTemp[id];
-                        break;
-                    }
-                    searchTick--;
-                }
-                if (lastInputs[id].tick == 0)
-                {
-                    lastInputs[id] = new InputPayload { tick = tick };
-                }
+                lastInputs[id] = GetLastKnownInput(id, tick);
             }
 
             ProcessShootInputsAtTick(cars, tick, pendingShootHits);
 
-            Debug.Log($"<color=green>[Lag Compensation]</color> Start rewinding from tick {tick} to {lastTick}");
+            if (ENABLE_DEBUG_LOG)
+                Debug.Log($"<color=green>[Lag Compensation]</color> Start rewinding from tick {tick} to {lastTick}");
 
             while (tickToProcess <= lastTick)
             {
                 for (int i = 0; i < cars.Length; i++)
                 {
                     CarController carReal = cars[i];
-                    int id = i;
+                    if (carReal == null) continue;
 
-                    if (carReal != null)
+                    InputPayload[] inputsAtTick = inputBuffer.Get(tickToProcess);
+                    if (inputsAtTick != null && inputsAtTick[i].tick == tickToProcess)
                     {
-                        InputPayload[] inputsAtTick = inputBuffer.Get(tickToProcess);
-                        if (inputsAtTick != null && inputsAtTick[id].tick == tickToProcess)
-                        {
-                            lastInputs[id] = inputsAtTick[id];
-                        }
-                        else
-                        {
-                            lastInputs[id].tick = tickToProcess;
-                        }
-
-                        carReal.ApplyInputForPhysics(lastInputs[id]);
+                        lastInputs[i] = inputsAtTick[i];
                     }
+                    else
+                    {
+                        lastInputs[i].tick = tickToProcess;
+                    }
+
+                    carReal.ApplyInputForPhysics(lastInputs[i]);
                 }
 
-                Physics.Simulate(1f / TICK_RATE);
+                Physics.Simulate(1f / TickRate);
 
                 ProcessShootInputsAtTick(cars, tickToProcess, pendingShootHits);
 
                 for (int i = 0; i < cars.Length; i++)
                 {
                     if (cars[i] == null) continue;
-                    CarController carReal = cars[i];
-                    int id = i;
                     StatePayload[] statesAtTick = stateBuffer.Get(tickToProcess);
-                    if (carReal != null && statesAtTick != null)
-                        statesAtTick[id] = carReal.GetStateOfCar(tickToProcess);
+                    if (statesAtTick != null) statesAtTick[i] = cars[i].GetStateOfCar(tickToProcess);
                 }
 
                 tickToProcess++;
@@ -864,14 +694,10 @@ public class RaceManager : MonoBehaviour
             for (int i = 0; i < cars.Length; i++)
             {
                 if (cars[i] == null) continue;
-                CarController carReal = cars[i];
-                if (carReal != null)
-                {
-                    carReal.ServerSendState(carReal.GetStateOfCar(), true);
-                }
+                cars[i].ServerSendState(cars[i].GetStateOfCar(), true);
             }
 
-            foreach (PendingShootHit hit in pendingShootHits)
+            foreach (var hit in pendingShootHits)
             {
                 hit.Shooter.ApplyServerShootHit(hit.Target);
             }
@@ -883,7 +709,7 @@ public class RaceManager : MonoBehaviour
         }
     }
 
-    private void ProcessShootInputsAtTick(CarController[] cars, int tick, List<PendingShootHit> pendingShootHits)
+    private void ProcessShootInputsAtTick(CarController[] cars, int tick, List<(CarController Shooter, CarController Target)> pendingShootHits)
     {
         InputPayload[] inputsAtTick = inputBuffer.Get(tick);
         if (inputsAtTick == null) return;
@@ -895,12 +721,12 @@ public class RaceManager : MonoBehaviour
 
             InputPayload input = inputsAtTick[id];
             if (input.tick != tick || !input.isShoot) continue;
-            if (!TryMarkShootProcessed(id, tick)) continue;
 
-            bool hasContext = shootContexts.TryGetValue(GetShootKey(id, tick), out ShootContext shootContext);
-            CarController target = hasContext
-                ? shooter.GetServerShootTarget(shootContext)
-                : shooter.GetServerShootTarget();
+            var shootKey = (id, tick);
+            if (!processedShootInputs.Add(shootKey)) continue;
+
+            bool hasContext = shootContexts.TryGetValue(shootKey, out ShootContext shootContext);
+            CarController target = shooter.GetServerShootTarget(shootContext);
             if (ENABLE_DEBUG_LOG)
             {
                 string targetText = target != null ? target.ID.ToString() : "none";
@@ -909,28 +735,31 @@ public class RaceManager : MonoBehaviour
 
             if (target != null)
             {
-                pendingShootHits.Add(new PendingShootHit(shooter, target));
+                pendingShootHits.Add((shooter, target));
             }
 
-            shootContexts.Remove(GetShootKey(id, tick));
+            shootContexts.Remove(shootKey);
         }
     }
 
-    private bool TryMarkShootProcessed(int id, int tick)
+    private InputPayload GetLastKnownInput(int id, int tick)
     {
-        return processedShootInputs.Add(GetShootKey(id, tick));
-    }
+        for (int searchTick = tick; searchTick >= 0; searchTick--)
+        {
+            InputPayload[] inputTemp = inputBuffer.Get(searchTick);
+            if (inputTemp != null && inputTemp[id].tick == searchTick)
+            {
+                return inputTemp[id];
+            }
+        }
 
-    private long GetShootKey(int id, int tick)
-    {
-        return ((long)tick << 32) | (uint)id;
+        return new InputPayload { tick = tick };
     }
 
     public void ResetAll()
     {
         stateBuffer?.Clear();
         inputBuffer?.Clear();
-        //rewindTickQueue.Clear();
         rewindTickQueue.Clear();
         processedShootInputs.Clear();
         shootContexts.Clear();
